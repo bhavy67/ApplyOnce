@@ -1,27 +1,73 @@
 /**
- * Content script: runs in the page and talks to site adapters.
+ * Content script: inspects the page on request. Injected on demand by the popup
+ * (activeTab + scripting) only after the user clicks "Analyze this page"; never declared
+ * in the manifest.
  *
- * It is not declared in the manifest. The plan is on-demand injection from the popup
- * (activeTab + scripting permissions, added in Phase 2), so ApplyOnce only touches a
- * page when the user asks it to, and needs no broad host permissions.
+ * It does not modify the page, keep state between scans, or observe DOM changes. It
+ * never receives profile values: only the profile status.
  */
 import { genericAdapter } from '@applyonce/adapter-generic';
 import { greenhouseAdapter } from '@applyonce/adapter-greenhouse';
 import { workdayAdapter } from '@applyonce/adapter-workday';
 import { selectAdapter } from '@applyonce/core';
-import { isDetectAdapterMessage, type DetectAdapterResponse } from '../messages';
+import { logFailure } from '../log-failure';
+import { fail, MessageType, ok, parseMessage, type PageScan } from '../messaging/protocol';
+import { sendToServiceWorker } from '../messaging/send';
+
+type Listener = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
 
 const SITE_ADAPTERS = [workdayAdapter, greenhouseAdapter];
 
-chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-  if (!isDetectAdapterMessage(message)) return;
+async function scanPage(): Promise<PageScan> {
+  const context = { url: window.location.href, root: document };
+  const platform = selectAdapter(SITE_ADAPTERS, genericAdapter, context).id;
+  // TODO(phase-4/5): use the site adapter's getFields once Workday/Greenhouse extraction
+  // exists. Until then generic extraction is used on every page.
+  const fields = genericAdapter.getFields(context);
+  const status = await sendToServiceWorker(MessageType.GetProfileStatus);
+  return {
+    title: document.title,
+    platform,
+    fields,
+    profileStatus: status.ok ? status.data : null,
+  };
+}
 
-  const adapter = selectAdapter(SITE_ADAPTERS, genericAdapter, {
-    url: window.location.href,
-    root: document,
-  });
-  const response: DetectAdapterResponse = { adapterId: adapter.id };
-  sendResponse(response);
+const listener: Listener = (message: unknown, _sender, sendResponse) => {
+  const parsed = parseMessage(message);
+  if (!parsed.ok) {
+    sendResponse(parsed);
+    return false;
+  }
+  switch (parsed.data.type) {
+    case MessageType.Ping:
+      sendResponse(ok({ ready: true }));
+      return false;
+    case MessageType.ScanPage:
+      scanPage().then(
+        (scan) => sendResponse(ok(scan)),
+        (error: unknown) => {
+          logFailure('page scan', error);
+          sendResponse(fail('internal-error'));
+        },
+      );
+      return true; // Async response.
+    default:
+      sendResponse(fail('unknown-message'));
+      return false;
+  }
+};
 
-  // TODO(phase-2): adapter.getFields → mapFields → review in popup → fill (never submit).
-});
+// Injection is idempotent: running this script again replaces the listener instead of
+// adding a second one. The registry lives in the extension's isolated world, invisible to
+// the page.
+const registry = globalThis as typeof globalThis & { __applyOnceListener?: Listener };
+if (registry.__applyOnceListener) {
+  try {
+    chrome.runtime.onMessage.removeListener(registry.__applyOnceListener);
+  } catch {
+    // The previous listener belongs to an invalidated context (extension reloaded).
+  }
+}
+chrome.runtime.onMessage.addListener(listener);
+registry.__applyOnceListener = listener;

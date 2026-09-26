@@ -9,17 +9,24 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 1 — Profile: complete.** You can create, edit, validate, save, and clear a personal
-profile in the extension. It is stored locally in the browser. There is no autofill yet.
+**Phase 2 — Form detection and extension messaging: complete.**
 
-Next up: **Phase 2 — Generic Chrome autofill** (form detection, field extraction, filling).
+- Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
+  locally in the browser.
+- Phase 2: **Analyze this page** in the popup scans the current tab once and lists the form
+  fields it found, and the content script confirms through the service worker that a
+  profile is available.
+
+Nothing is mapped or filled yet. Next up: mapping detected fields to the profile and
+filling them after review.
 
 ## Repository structure
 
 ```text
 apps/
-  chrome-extension/     MV3 extension: popup, profile page (React), IndexedDB storage,
-                        service worker, content script
+  chrome-extension/     MV3 extension: popup (page analysis), profile page (React),
+                        IndexedDB storage, service worker (profile access), content
+                        script (page scan), typed message protocol
 packages/
   core/                 Shared domain types: field types, form fields, profile field keys,
                         mappings, confidence, adapter interface, local storage interface
@@ -27,7 +34,7 @@ packages/
   field-mapper/         Text normalization, field signatures, matcher interface,
                         basic deterministic alias matcher
 adapters/
-  generic/              Fallback adapter for ordinary HTML forms (stub)
+  generic/              Field scanner for ordinary HTML forms (used on every page)
   workday/              Workday adapter (stub: URL detection only)
   greenhouse/           Greenhouse adapter (stub: URL detection only)
 docs/                   Engineering notes (see docs/architecture.md)
@@ -120,6 +127,52 @@ Storage code lives only in the extension (`apps/chrome-extension/src/storage`), 
 To inspect stored data during development, open the profile page, then DevTools →
 Application → IndexedDB → `applyonce`.
 
+## Analyzing a page
+
+1. Open a page with a form and click the ApplyOnce toolbar icon.
+2. Click **Analyze this page**. The popup shows how many fields were detected, how many have
+   a clear label and how many need review, how many are hidden or disabled, and whether a
+   profile is saved.
+3. **View fields** lists every detected field: its label (or "Unlabeled field"), type,
+   `name`/`id`, and flags (required, hidden, disabled, needs review).
+
+Nothing on the page is changed or filled.
+
+### What happens
+
+```text
+popup ── chrome.tabs.query (active tab) ── URL check (http/https/file only)
+  │
+  ├─ Ping ─► content script?  no answer → chrome.scripting.executeScript(content.js)
+  ├─ ScanPage ─► content script
+  │               ├─ generic adapter scans the DOM once → FormField[]
+  │               └─ GetProfileStatus ─► service worker ─► ProfileRepository ─► IndexedDB
+  │                                     ◄─ { hasData, valueCount }  (no values)
+  ◄─ { title, platform, fields, profileStatus }
+```
+
+- **Permissions:** `activeTab` and `scripting` only. There are no host permissions and no
+  content script registered in the manifest. `activeTab` grants temporary access to the
+  current tab only when you click the toolbar icon, so ApplyOnce cannot read any page you
+  have not explicitly opened it on.
+- **Supported fields:** text (including `search` and `url` inputs), email, tel, number,
+  textarea, select, checkbox, radio (grouped by name). Ignored: password, hidden, file,
+  date/time pickers, buttons, rich text editors, and custom widgets.
+- **What is inspected:** for each supported control, its type, `name`, `id`, label text
+  (`<label for>`, wrapping `<label>`, `aria-labelledby`), `aria-label`, `placeholder`,
+  `autocomplete`, fieldset legend or nearby text for unlabeled fields, required/disabled/
+  visible state, select and radio option labels, and the enclosing form's `id`/`name`/
+  `action`. Also the page title.
+- **What is never read:** values typed into or selected on the page, passwords, hidden
+  inputs, and other page content.
+- **Pages that cannot be analyzed:** `chrome://` and other browser pages, extension pages,
+  the Chrome Web Store, and `file://` pages unless "Allow access to file URLs" is enabled
+  for the extension. These show "This page cannot be analyzed." Only the top frame is
+  scanned (not iframes).
+
+Unlabeled or ambiguous fields are counted as **needs review**. Hidden and disabled fields are
+listed but not counted as detected.
+
 ## How the packages are built
 
 Workspace packages are internal and export their TypeScript source directly
@@ -128,23 +181,31 @@ type-checked individually and bundled by Vite into the extension. Tests import t
 way.
 
 The extension uses two Vite configs: `vite.config.ts` builds the popup, the profile page, and
-the service worker (ES modules), and `vite.content.config.ts` builds the content script as a single classic script,
-because MV3 content scripts cannot be ES modules.
+the service worker (ES modules), and `vite.content.config.ts` builds the content script as a
+single classic script, because MV3 content scripts cannot be ES modules.
 
 ## Privacy and security conventions
 
 - Everything stays local. No backend, analytics, telemetry, or external requests.
 - Never log profile values. ESLint rejects `console.log`/`console.info`/`console.debug`;
   `console.warn`/`console.error` are allowed for failures and must not include profile data.
-- The extension requests no permissions yet. Page access will be requested narrowly
-  (`activeTab` + `scripting`, on user action) when form detection is implemented.
+- Minimal permissions: `activeTab` + `scripting`, with injection only after an explicit
+  click. No host permissions.
+- The profile stays inside the extension. The service worker is the only context that reads
+  it for others. The full profile (`GetProfile`) is returned only to extension pages;
+  content scripts, which share a process with the web page, only get a profile status with
+  no values. Nothing is written into the page's DOM, globals, storage, or URL.
+- The scanner collects field metadata only, never page values.
 - No secrets or API keys in the repository. `.env*` files are git-ignored.
 
 ## Intentionally not implemented yet
 
-- Form field extraction and filling (generic, Workday, Greenhouse adapters are stubs)
-- Resolving a profile field key to a profile value, and giving content scripts access to the
-  profile (they cannot read the extension's IndexedDB directly)
+- Mapping detected fields to the profile, and filling. No field is ever filled yet.
+- Workday and Greenhouse field extraction (the adapters only recognise their URLs; generic
+  extraction is used everywhere)
+- Resolving a profile field key to a profile value, and deciding how the needed values
+  reach the page for filling
+- Continuous DOM observation (MutationObserver), iframes, shadow DOM, custom widgets
 - Profile completeness checks
 - Editing work history, documents, and custom answers in the UI
 - Encryption at rest of the local profile

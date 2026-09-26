@@ -6,6 +6,7 @@ import {
   type ProfileFieldErrors,
 } from '@applyonce/profile';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { logFailure } from '../log-failure';
 import type { ProfileRepository } from '../storage';
 
 export type LoadState = 'loading' | 'ready' | 'failed';
@@ -39,7 +40,7 @@ export function useProfileEditor(repository: ProfileRepository) {
       },
       (error: unknown) => {
         if (cancelled) return;
-        logFailure('load', error);
+        logFailure('profile load', error);
         setLoadState('failed');
       },
     );
@@ -75,7 +76,7 @@ export function useProfileEditor(repository: ProfileRepository) {
       setShowErrors(false);
       setStatus({ kind: 'success', text: 'Profile saved' });
     } catch (error) {
-      logFailure('save', error);
+      logFailure('profile save', error);
       setStatus({ kind: 'error', text: 'Could not save your profile. Please try again.' });
     } finally {
       setBusy(false);
@@ -91,7 +92,7 @@ export function useProfileEditor(repository: ProfileRepository) {
       setShowErrors(false);
       setStatus({ kind: 'success', text: 'Profile cleared' });
     } catch (error) {
-      logFailure('clear', error);
+      logFailure('profile clear', error);
       setStatus({ kind: 'error', text: 'Could not clear your profile. Please try again.' });
     } finally {
       setBusy(false);
@@ -99,10 +100,4 @@ export function useProfileEditor(repository: ProfileRepository) {
   }
 
   return { loadState, profile, errors, dirty, busy, status, update, save, clear };
-}
-
-/** Logs the error type only. Never log profile values. */
-function logFailure(operation: string, error: unknown) {
-  const kind = error instanceof Error ? error.name : typeof error;
-  console.error(`ApplyOnce: profile ${operation} failed (${kind})`);
 }

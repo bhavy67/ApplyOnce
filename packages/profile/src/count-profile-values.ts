@@ -1,0 +1,20 @@
+import type { Profile } from './profile';
+
+/**
+ * Number of values the user has entered (non-blank text, numbers, booleans, list items'
+ * values). Metadata such as `schemaVersion` is not counted. Useful for reporting that a
+ * profile exists without exposing any of its values.
+ */
+export function countProfileValues(profile: Profile): number {
+  return countValues({ ...profile, schemaVersion: undefined });
+}
+
+function countValues(value: unknown): number {
+  if (typeof value === 'string') return value.trim() === '' ? 0 : 1;
+  if (typeof value === 'number' || typeof value === 'boolean') return 1;
+  if (Array.isArray(value)) return value.reduce((sum: number, item) => sum + countValues(item), 0);
+  if (typeof value === 'object' && value !== null) {
+    return Object.values(value).reduce((sum: number, item) => sum + countValues(item), 0);
+  }
+  return 0;
+}

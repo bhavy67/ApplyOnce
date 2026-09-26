@@ -1,4 +1,5 @@
 export * from './profile';
+export { countProfileValues } from './count-profile-values';
 export { createEmptyProfile } from './create-empty-profile';
 export { sanitizeProfile } from './sanitize-profile';
 export {

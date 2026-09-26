@@ -5,7 +5,15 @@ import { createAliasMatcher, createFieldSignature, mapFields, toSignatureKey } f
 let nextId = 0;
 function field(type: FieldType, signals: FormField['signals']): FormField {
   nextId += 1;
-  return { id: `field-${nextId}`, type, required: false, signals };
+  return {
+    id: `field-${nextId}`,
+    type,
+    htmlType: type,
+    required: false,
+    visible: true,
+    disabled: false,
+    signals,
+  };
 }
 
 const matcher = createAliasMatcher();
