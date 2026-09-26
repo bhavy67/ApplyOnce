@@ -1,6 +1,12 @@
 export * from './profile';
 export { countProfileValues } from './count-profile-values';
 export { createEmptyProfile } from './create-empty-profile';
+export {
+  getProfileValue,
+  isProfileFieldKey,
+  PROFILE_FIELD_PATHS,
+  readProfilePath,
+} from './profile-values';
 export { sanitizeProfile } from './sanitize-profile';
 export {
   MAX_EXPERIENCE_YEARS,

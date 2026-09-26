@@ -1,4 +1,5 @@
 import {
+  CONFIDENCE_THRESHOLDS,
   PROFILE_FIELDS,
   toConfidenceLevel,
   type MatchReason,
@@ -7,45 +8,75 @@ import {
 import { AUTOCOMPLETE_TOKENS, DEFAULT_ALIASES } from './aliases';
 import type { FieldSignature } from './field-signature';
 import type { FieldMatch, FieldMatcher } from './matcher';
-import { compactText } from './normalize';
+import { compactText, normalizeText } from './normalize';
 
 /**
- * Provisional signal weights (spec §19). Scores are summed and capped at 100.
- * Tune against real-form fixtures; do not treat as final.
+ * Signal weights, summed and capped at 100 (spec §19). Provisional: tune against real
+ * forms. With the thresholds in core (high ≥ 90, review ≥ 70, confirm ≥ 40):
+ *
+ * - exact label or autocomplete + compatible type → high (a clear exact match)
+ * - name/id alone, placeholder, label containment, nearby text → review at most
+ * - name/id + placeholder, or label + name → high
  */
 export const SIGNAL_WEIGHTS = {
-  autocomplete: 60,
+  autocomplete: 80,
+  label: 80,
   identifier: 40,
-  label: 40,
-  placeholder: 15,
+  placeholder: 40,
+  labelContains: 40,
+  nearbyText: 30,
   fieldType: 10,
 } as const;
 
 /**
- * Basic deterministic matcher: exact (whitespace-insensitive) alias comparison per
- * signal plus HTML autocomplete tokens.
- *
- * TODO(phase-2): partial/contains matching, nearby-text context, option-aware matching
- * for select/radio fields.
+ * A runner-up candidate (a different profile field) scoring at least this much means the
+ * metadata points in two directions, so the best match is capped below "high".
+ */
+export const CONFLICT_MIN_SCORE = 50;
+
+interface AliasSet {
+  /** Whitespace-free forms, for exact comparison ("firstName" = "first name"). */
+  compact: ReadonlySet<string>;
+  /** Normalized multi-word phrases, for containment in longer labels. */
+  phrases: readonly string[];
+}
+
+/**
+ * Deterministic matcher over aliases and HTML autocomplete tokens. Every point of the
+ * score comes with a reason, so each result can be explained.
  */
 export function createAliasMatcher(
   aliases: Readonly<Partial<Record<ProfileFieldKey, readonly string[]>>> = DEFAULT_ALIASES,
 ): FieldMatcher {
-  const compactAliases = new Map<ProfileFieldKey, Set<string>>();
+  const aliasSets = new Map<ProfileFieldKey, AliasSet>();
   for (const [key, phrases] of Object.entries(aliases) as [ProfileFieldKey, readonly string[]][]) {
-    compactAliases.set(key, new Set(phrases.map(compactText)));
+    const normalized = phrases.map(normalizeText);
+    aliasSets.set(key, {
+      compact: new Set(phrases.map(compactText)),
+      phrases: normalized.filter((phrase) => phrase.includes(' ')),
+    });
   }
 
   return {
     match(signature) {
-      let best: FieldMatch | undefined;
-      for (const [profileField, phrases] of compactAliases) {
-        const candidate = scoreCandidate(signature, profileField, phrases);
-        if (candidate && (!best || candidate.confidence.score > best.confidence.score)) {
-          best = candidate;
-        }
-      }
-      return best;
+      const candidates = [...aliasSets]
+        .map(([profileField, aliasSet]) => scoreCandidate(signature, profileField, aliasSet))
+        .filter((candidate) => candidate !== undefined)
+        .sort((a, b) => b.confidence.score - a.confidence.score);
+
+      const [best, runnerUp] = candidates;
+      if (!best) return undefined;
+      if (!runnerUp || runnerUp.confidence.score < CONFLICT_MIN_SCORE) return best;
+
+      const score = Math.min(best.confidence.score, CONFIDENCE_THRESHOLDS.high - 1);
+      return {
+        profileField: best.profileField,
+        confidence: {
+          score,
+          level: toConfidenceLevel(score),
+          reasons: [...best.confidence.reasons, 'conflict'],
+        },
+      };
     },
   };
 }
@@ -53,47 +84,50 @@ export function createAliasMatcher(
 function scoreCandidate(
   signature: FieldSignature,
   profileField: ProfileFieldKey,
-  phrases: ReadonlySet<string>,
+  aliasSet: AliasSet,
 ): FieldMatch | undefined {
-  const matches = (text: string | undefined) =>
-    text !== undefined && phrases.has(compactText(text));
+  const equals = (text: string | undefined) =>
+    text !== undefined && aliasSet.compact.has(compactText(text));
+  const contains = (text: string | undefined) =>
+    text !== undefined && aliasSet.phrases.some((phrase) => ` ${text} `.includes(` ${phrase} `));
+
   const reasons: MatchReason[] = [];
   let score = 0;
+  const add = (weight: number, ...matched: (MatchReason | false)[]) => {
+    const hits = matched.filter((reason): reason is MatchReason => reason !== false);
+    if (hits.length === 0) return false;
+    score += weight;
+    reasons.push(...hits);
+    return true;
+  };
 
   if (signature.autocomplete && AUTOCOMPLETE_TOKENS[signature.autocomplete] === profileField) {
-    score += SIGNAL_WEIGHTS.autocomplete;
-    reasons.push('autocomplete');
+    add(SIGNAL_WEIGHTS.autocomplete, 'autocomplete');
   }
-
-  const identifierReasons = [
-    matches(signature.name) && 'name',
-    matches(signature.htmlId) && 'html-id',
-  ].filter((reason): reason is MatchReason => reason !== false);
-  if (identifierReasons.length > 0) {
-    score += SIGNAL_WEIGHTS.identifier;
-    reasons.push(...identifierReasons);
+  add(
+    SIGNAL_WEIGHTS.identifier,
+    (equals(signature.name) || equals(signature.nameTail)) && 'name',
+    (equals(signature.htmlId) || equals(signature.idTail)) && 'html-id',
+  );
+  const exactLabel = add(
+    SIGNAL_WEIGHTS.label,
+    equals(signature.label) && 'label',
+    equals(signature.ariaLabel) && 'aria-label',
+  );
+  if (!exactLabel) {
+    add(
+      SIGNAL_WEIGHTS.labelContains,
+      (contains(signature.label) || contains(signature.ariaLabel)) && 'label-contains',
+    );
   }
-
-  const labelReasons = [
-    matches(signature.label) && 'label',
-    matches(signature.ariaLabel) && 'aria-label',
-  ].filter((reason): reason is MatchReason => reason !== false);
-  if (labelReasons.length > 0) {
-    score += SIGNAL_WEIGHTS.label;
-    reasons.push(...labelReasons);
-  }
-
-  if (matches(signature.placeholder)) {
-    score += SIGNAL_WEIGHTS.placeholder;
-    reasons.push('placeholder');
-  }
+  add(SIGNAL_WEIGHTS.placeholder, equals(signature.placeholder) && 'placeholder');
+  add(SIGNAL_WEIGHTS.nearbyText, equals(signature.nearbyText) && 'nearby-text');
 
   if (score === 0) return undefined;
 
   // Field type only corroborates a text match; it never creates a match on its own.
   if (PROFILE_FIELDS[profileField].fieldTypes.includes(signature.fieldType)) {
-    score += SIGNAL_WEIGHTS.fieldType;
-    reasons.push('field-type');
+    add(SIGNAL_WEIGHTS.fieldType, 'field-type');
   }
 
   score = Math.min(score, 100);

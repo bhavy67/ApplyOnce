@@ -11,7 +11,13 @@ import {
 } from './field-text';
 import { isVisible } from './visibility';
 
-type FormControl = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+export type FormControl = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+
+/** A detected field and the control(s) it currently corresponds to (several for a radio group). */
+export interface ScannedField {
+  field: FormField;
+  controls: FormControl[];
+}
 
 /**
  * Supported controls by their `type` property. Everything else is ignored: password,
@@ -39,11 +45,19 @@ const FIELD_TYPE_BY_HTML_TYPE: Readonly<Record<string, FieldType>> = {
  * options. Only metadata is read: the scanner never reads what the user typed or selected.
  */
 export function scanFields(root: ParentNode): FormField[] {
+  return scanControls(root).map(({ field }) => field);
+}
+
+/**
+ * The same scan, keeping element references. Used for filling, where fields are located
+ * again by id in the current DOM rather than through references kept since analysis.
+ */
+export function scanControls(root: ParentNode): ScannedField[] {
   const labelsByFor = collectLabelsByFor(root);
   const ids = new Set<string>();
   // Radio groups are keyed by form (null = outside any form), then by name.
-  const radioGroups = new Map<HTMLFormElement | null, Map<string, FormField>>();
-  const fields: FormField[] = [];
+  const radioGroups = new Map<HTMLFormElement | null, Map<string, ScannedField>>();
+  const scanned: ScannedField[] = [];
 
   root.querySelectorAll<FormControl>(CONTROL_SELECTOR).forEach((control, index) => {
     const type = FIELD_TYPE_BY_HTML_TYPE[control.type];
@@ -52,15 +66,17 @@ export function scanFields(root: ParentNode): FormField[] {
     const name = attributeText(control, 'name');
 
     if (control.type === 'radio' && name) {
-      const groupsInForm = radioGroups.get(control.form) ?? new Map<string, FormField>();
+      const groupsInForm = radioGroups.get(control.form) ?? new Map<string, ScannedField>();
       radioGroups.set(control.form, groupsInForm);
       const option = radioOption(control, labelsByFor);
       const group = groupsInForm.get(name);
       if (group) {
-        group.options = [...(group.options ?? []), option];
-        group.visible ||= isVisible(control);
-        group.disabled &&= isDisabled(control);
-        group.required ||= isRequired(control);
+        const { field } = group;
+        field.options = [...(field.options ?? []), option];
+        field.visible ||= isVisible(control);
+        field.disabled &&= isDisabled(control);
+        field.required ||= isRequired(control);
+        group.controls.push(control);
         return;
       }
       const field = createField(control, {
@@ -69,8 +85,9 @@ export function scanFields(root: ParentNode): FormField[] {
         signals: compact({ name, label: radioGroupLabel(control) }),
       });
       field.options = [option];
-      groupsInForm.set(name, field);
-      fields.push(field);
+      const entry = { field, controls: [control] };
+      groupsInForm.set(name, entry);
+      scanned.push(entry);
       return;
     }
 
@@ -101,10 +118,10 @@ export function scanFields(root: ParentNode): FormField[] {
     } else if (type === 'radio') {
       field.options = [radioOption(control, labelsByFor)];
     }
-    fields.push(field);
+    scanned.push({ field, controls: [control] });
   });
 
-  return fields;
+  return scanned;
 }
 
 function createField(

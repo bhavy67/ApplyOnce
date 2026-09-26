@@ -98,6 +98,9 @@ importers:
       '@applyonce/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@applyonce/field-mapper':
+        specifier: workspace:*
+        version: link:../../packages/field-mapper
     devDependencies:
       happy-dom:
         specifier: 'catalog:'
@@ -140,6 +143,9 @@ importers:
       '@applyonce/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@applyonce/field-mapper':
+        specifier: workspace:*
+        version: link:../../packages/field-mapper
       '@applyonce/profile':
         specifier: workspace:*
         version: link:../../packages/profile
@@ -189,6 +195,10 @@ importers:
         version: 6.0.3
 
   packages/profile:
+    dependencies:
+      '@applyonce/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       typescript:
         specifier: 'catalog:'

@@ -1,23 +1,28 @@
 import {
+  createMessage,
   fail,
   isMessageResult,
-  type Message,
   type MessageType,
+  type PayloadArgs,
   type ResponseFor,
 } from './protocol';
 
 /** Sends a message to the service worker (and any open extension pages). */
-export async function sendToServiceWorker<T extends MessageType>(type: T): Promise<ResponseFor<T>> {
-  return deliver<T>(() => chrome.runtime.sendMessage({ type } satisfies Message<T>));
+export async function sendToServiceWorker<T extends MessageType>(
+  type: T,
+  ...payload: PayloadArgs<T>
+): Promise<ResponseFor<T>> {
+  return deliver<T>(() => chrome.runtime.sendMessage(createMessage(type, ...payload)));
 }
 
 /** Sends a message to the content script in the tab's top frame. */
 export async function sendToTab<T extends MessageType>(
   tabId: number,
   type: T,
+  ...payload: PayloadArgs<T>
 ): Promise<ResponseFor<T>> {
   return deliver<T>(() =>
-    chrome.tabs.sendMessage(tabId, { type } satisfies Message<T>, { frameId: 0 }),
+    chrome.tabs.sendMessage(tabId, createMessage(type, ...payload), { frameId: 0 }),
   );
 }
 

@@ -9,40 +9,42 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 2 — Form detection and extension messaging: complete.**
+**Phase 3 — Deterministic field mapping and safe autofill: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
-- Phase 2: **Analyze this page** in the popup scans the current tab once and lists the form
-  fields it found, and the content script confirms through the service worker that a
-  profile is available.
+- Phase 2: **Analyze this page** scans the current tab once and lists its form fields.
+- Phase 3: each detected field is mapped to a profile field with an explainable
+  confidence. You review the mappings, and **Fill** writes only the fields you approved.
+  Nothing is ever submitted.
 
-Nothing is mapped or filled yet. Next up: mapping detected fields to the profile and
-filling them after review.
+Generic HTML forms only; Workday and Greenhouse get dedicated support in later phases.
 
 ## Repository structure
 
 ```text
 apps/
-  chrome-extension/     MV3 extension: popup (page analysis), profile page (React),
-                        IndexedDB storage, service worker (profile access), content
-                        script (page scan), typed message protocol
+  chrome-extension/     MV3 extension: popup (analyze, review, fill), profile page
+                        (React), IndexedDB storage, service worker (profile access,
+                        mapping), content script (scan, fill), typed message protocol
 packages/
   core/                 Shared domain types: field types, form fields, profile field keys,
                         mappings, confidence, adapter interface, local storage interface
-  profile/              Personal profile model, validation, save-time sanitizing
-  field-mapper/         Text normalization, field signatures, matcher interface,
-                        basic deterministic alias matcher
+  profile/              Personal profile model, validation, save-time sanitizing,
+                        profile field → value lookup
+  field-mapper/         Text normalization, field signatures, deterministic alias
+                        matcher with confidence, per-field mapping status
 adapters/
-  generic/              Field scanner for ordinary HTML forms (used on every page)
+  generic/              Field scanner and filler for ordinary HTML forms (used on
+                        every page)
   workday/              Workday adapter (stub: URL detection only)
   greenhouse/           Greenhouse adapter (stub: URL detection only)
 docs/                   Engineering notes (see docs/architecture.md)
 ```
 
 Dependency rules are described in [`docs/architecture.md`](./docs/architecture.md). In short:
-`core` and `profile` depend on nothing; `field-mapper` and adapters depend on `core`; only the
-extension uses browser or Chrome APIs.
+`core` depends on nothing; `profile`, `field-mapper`, and adapters build on it; only adapters
+use DOM APIs and only the extension uses Chrome APIs.
 
 ## Technology
 
@@ -130,13 +132,14 @@ Application → IndexedDB → `applyonce`.
 ## Analyzing a page
 
 1. Open a page with a form and click the ApplyOnce toolbar icon.
-2. Click **Analyze this page**. The popup shows how many fields were detected, how many have
-   a clear label and how many need review, how many are hidden or disabled, and whether a
-   profile is saved.
-3. **View fields** lists every detected field: its label (or "Unlabeled field"), type,
-   `name`/`id`, and flags (required, hidden, disabled, needs review).
-
-Nothing on the page is changed or filled.
+2. Click **Analyze this page**. The popup lists every detected field with the profile field
+   it maps to, the confidence, and whether it will be filled. Analysis never changes the
+   page.
+3. Review the list. High-confidence matches with a profile value start selected; tick
+   review-level matches you agree with, untick anything you don't want filled.
+4. Click **Fill N selected fields**. Each field then shows Filled, Skipped, Failed, or Not
+   found, and a summary line such as "8 fields filled · 1 failed · 1 need review".
+5. Check the page and submit it yourself. ApplyOnce never submits.
 
 ### What happens
 
@@ -149,6 +152,17 @@ popup ── chrome.tabs.query (active tab) ── URL check (http/https/file on
   │               └─ GetProfileStatus ─► service worker ─► ProfileRepository ─► IndexedDB
   │                                     ◄─ { hasData, valueCount }  (no values)
   ◄─ { title, platform, fields, profileStatus }
+  │
+  ├─ MapFields { fields } ─► service worker: deterministic mapper + profile
+  │                         ◄─ one mapping per field + hasValue  (no values)
+  │
+  │  … user reviews and clicks Fill …
+  │
+  └─ FillPage { tabId, approvals } ─► service worker
+                  re-checks each approval, looks up only those values
+                  ├─ FillFields { approved field/value pairs } ─► content script
+                  │     re-finds each field in the current DOM, fills, notifies the page
+                  ◄─ one result per field (filled / skipped / failed / not-found / unsupported)
 ```
 
 - **Permissions:** `activeTab` and `scripting` only. There are no host permissions and no
@@ -170,8 +184,39 @@ popup ── chrome.tabs.query (active tab) ── URL check (http/https/file on
   for the extension. These show "This page cannot be analyzed." Only the top frame is
   scanned (not iframes).
 
-Unlabeled or ambiguous fields are counted as **needs review**. Hidden and disabled fields are
-listed but not counted as detected.
+### Mapping and confidence
+
+Mapping is deterministic and explainable. Every point of a score comes from a named signal:
+
+| Signal                                                                            | Weight |
+| --------------------------------------------------------------------------------- | ------ |
+| HTML `autocomplete` token (e.g. `given-name`)                                     | 80     |
+| Label or `aria-label` equals a known phrase                                       | 80     |
+| `name`/`id` equals a known phrase (also the last part of `applicant[first_name]`) | 40     |
+| Placeholder equals a known phrase                                                 | 40     |
+| A multi-word phrase appears inside a longer label                                 | 40     |
+| Nearby text or fieldset legend equals a known phrase                              | 30     |
+| Field type suits the profile field (only adds to a text match)                    | 10     |
+
+Scores are capped at 100. **High** (≥ 90) → status _mapped_, pre-selected. **Medium** (70–89)
+and **Low** (40–69) → status _review_, selectable but never pre-selected. Below 40 → _unknown_,
+never filled. If a second profile field also scores ≥ 50, the result is capped at Medium
+(a _conflict_). A match the field cannot hold (e.g. an email into a checkbox) or a hidden or
+disabled field is _unsupported_. The weights are provisional, to be tuned on real forms.
+
+### Filling
+
+- Text-like fields: the value is written with the element's native setter, then `input` and
+  `change` events are dispatched, so React, Vue, Angular and plain listeners see the change.
+  Fields that already have a value are **skipped**, never overwritten.
+- Select: matched by exact option value, then normalized value, then normalized label. No
+  match or several matches means **failed**, and the selection is left alone.
+- Checkbox: set from yes/no values with a real `click()`. Radio group: the one option that
+  matches is clicked (booleans match Yes/No options).
+- Before filling, the page is scanned again and each field is located by its deterministic
+  id and checked against its metadata from analysis. A removed or replaced field is
+  **not found**; the others are still filled.
+- Filling never submits, clicks buttons, or touches fields that were not approved.
 
 ## How the packages are built
 
@@ -193,23 +238,25 @@ single classic script, because MV3 content scripts cannot be ES modules.
   click. No host permissions.
 - The profile stays inside the extension. The service worker is the only context that reads
   it for others. The full profile (`GetProfile`) is returned only to extension pages;
-  content scripts, which share a process with the web page, only get a profile status with
-  no values. Nothing is written into the page's DOM, globals, storage, or URL.
+  content scripts, which share a process with the web page, get a profile status and, after
+  you click Fill, only the approved field/value pairs. The popup never receives profile
+  values (only whether a value exists). Mapping and fill requests are refused from content
+  scripts. Nothing else is written into the page's DOM, globals, storage, or URL.
 - The scanner collects field metadata only, never page values.
 - No secrets or API keys in the repository. `.env*` files are git-ignored.
 
 ## Intentionally not implemented yet
 
-- Mapping detected fields to the profile, and filling. No field is ever filled yet.
-- Workday and Greenhouse field extraction (the adapters only recognise their URLs; generic
-  extraction is used everywhere)
-- Resolving a profile field key to a profile value, and deciding how the needed values
-  reach the page for filling
-- Continuous DOM observation (MutationObserver), iframes, shadow DOM, custom widgets
+- Workday and Greenhouse extraction and filling (the adapters only recognise their URLs;
+  the generic adapter is used everywhere)
+- Education, work history, work mode, and employment type as fill targets (no profile field
+  keys yet)
+- Teach Once / saved mappings, manual re-mapping of a field to another profile field
+- Continuous DOM observation (MutationObserver), iframes, shadow DOM, custom widgets,
+  date pickers, file uploads
 - Profile completeness checks
 - Editing work history, documents, and custom answers in the UI
 - Encryption at rest of the local profile
-- Confidence review UI, manual mapping, "Teach Once" saved mappings
 - Android app (`android/` will be added in Phase 7)
 - Encrypted sync, backend, accounts
 - AI-based field mapping

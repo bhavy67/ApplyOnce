@@ -9,6 +9,12 @@ export interface FieldSignature {
   fieldType: FieldType;
   name?: string;
   htmlId?: string;
+  /**
+   * Last segment of a structured name or id, e.g. "first name" for
+   * `job_application[first_name]` or `applicant.firstName`.
+   */
+  nameTail?: string;
+  idTail?: string;
   label?: string;
   ariaLabel?: string;
   placeholder?: string;
@@ -23,6 +29,8 @@ export function createFieldSignature(field: FormField): FieldSignature {
     fieldType: field.type,
     name: normalizeOptional(signals.name),
     htmlId: normalizeOptional(signals.htmlId),
+    nameTail: identifierTail(signals.name),
+    idTail: identifierTail(signals.htmlId),
     label: normalizeOptional(signals.label),
     ariaLabel: normalizeOptional(signals.ariaLabel),
     placeholder: normalizeOptional(signals.placeholder),
@@ -44,4 +52,11 @@ export function toSignatureKey(signature: FieldSignature): string {
 function normalizeOptional(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   return normalizeText(value) || undefined;
+}
+
+/** Only set when the identifier is structured (has [ ] . : or / separators). */
+function identifierTail(value: string | undefined): string | undefined {
+  const segments = value?.split(/[[\].:/]+/).filter(Boolean) ?? [];
+  if (segments.length < 2) return undefined;
+  return normalizeOptional(segments.at(-1));
 }

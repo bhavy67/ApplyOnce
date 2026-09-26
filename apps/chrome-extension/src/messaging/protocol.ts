@@ -1,12 +1,15 @@
-import type { FormField } from '@applyonce/core';
+import type { FieldMapping, FillInstruction, FillResult, FormField } from '@applyonce/core';
 import type { Profile } from '@applyonce/profile';
+import { isBoundedArray, isFillInstruction, isFormField, isRecord } from './validate';
 
 /**
  * Every message exchanged between extension contexts. Messages never leave the
  * extension; nothing here talks to external services.
  *
- *   popup ──ScanPage/Ping──► content script (tabs.sendMessage)
- *   content script ──GetProfileStatus──► service worker (runtime.sendMessage)
+ *   popup ──Ping/ScanPage──► content script              (tabs.sendMessage)
+ *   content script ──GetProfileStatus──► service worker  (runtime.sendMessage)
+ *   popup ──MapFields/FillPage──► service worker
+ *   service worker ──FillFields──► content script        (approved values only)
  *   extension pages ──GetProfile──► service worker
  */
 export const MessageType = {
@@ -18,13 +21,15 @@ export const MessageType = {
   GetProfile: 'applyonce/get-profile',
   /** Whether a profile is saved, without any of its values. */
   GetProfileStatus: 'applyonce/get-profile-status',
+  /** Map scanned fields to profile fields. Reports whether values exist, not the values. */
+  MapFields: 'applyonce/map-fields',
+  /** Fill the fields the user approved in a tab. Extension pages only. */
+  FillPage: 'applyonce/fill-page',
+  /** Service worker → content script: write these approved values into the page. */
+  FillFields: 'applyonce/fill-fields',
 } as const;
 
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
-
-export interface Message<T extends MessageType = MessageType> {
-  type: T;
-}
 
 export interface ProfileStatus {
   hasData: boolean;
@@ -40,12 +45,51 @@ export interface PageScan {
   profileStatus: ProfileStatus | null;
 }
 
+/** A mapping as shown for review: whether the profile has a value, never the value. */
+export interface ReviewedMapping extends FieldMapping {
+  hasValue: boolean;
+}
+
+/** The user's approval to fill one field from one profile field. */
+export interface FieldApproval {
+  field: FormField;
+  profileField: string;
+}
+
+/** Request payload for each message type (undefined = no payload). */
+export interface PayloadByType {
+  [MessageType.Ping]: undefined;
+  [MessageType.ScanPage]: undefined;
+  [MessageType.GetProfile]: undefined;
+  [MessageType.GetProfileStatus]: undefined;
+  [MessageType.MapFields]: { fields: FormField[] };
+  [MessageType.FillPage]: { tabId: number; approvals: FieldApproval[] };
+  [MessageType.FillFields]: { instructions: FillInstruction[] };
+}
+
 /** Response payload for each message type. */
 export interface ResponseDataByType {
   [MessageType.Ping]: { ready: true };
   [MessageType.ScanPage]: PageScan;
   [MessageType.GetProfile]: Profile;
   [MessageType.GetProfileStatus]: ProfileStatus;
+  [MessageType.MapFields]: { mappings: ReviewedMapping[] };
+  [MessageType.FillPage]: { results: FillResult[] };
+  [MessageType.FillFields]: { results: FillResult[] };
+}
+
+export type Message<T extends MessageType = MessageType> = T extends MessageType
+  ? PayloadByType[T] extends undefined
+    ? { type: T }
+    : { type: T; payload: PayloadByType[T] }
+  : never;
+
+export type PayloadArgs<T extends MessageType> = PayloadByType[T] extends undefined
+  ? []
+  : [payload: PayloadByType[T]];
+
+export function createMessage<T extends MessageType>(type: T, ...args: PayloadArgs<T>): Message<T> {
+  return (args.length > 0 ? { type, payload: args[0] } : { type }) as Message<T>;
 }
 
 export type MessageError =
@@ -69,34 +113,51 @@ export const fail = (error: MessageError): { ok: false; error: MessageError } =>
   error,
 });
 
+/** Payload validators; types without a payload need none. */
+const PAYLOAD_VALIDATORS: Partial<Record<MessageType, (payload: unknown) => boolean>> = {
+  [MessageType.MapFields]: (p) =>
+    isRecord(p) && isBoundedArray(p.fields) && p.fields.every(isFormField),
+  [MessageType.FillPage]: (p) =>
+    isRecord(p) &&
+    Number.isInteger(p.tabId) &&
+    isBoundedArray(p.approvals) &&
+    p.approvals.every(
+      (a) => isRecord(a) && isFormField(a.field) && typeof a.profileField === 'string',
+    ),
+  [MessageType.FillFields]: (p) =>
+    isRecord(p) && isBoundedArray(p.instructions) && p.instructions.every(isFillInstruction),
+};
+
 const MESSAGE_TYPES: ReadonlySet<string> = new Set(Object.values(MessageType));
 
-/** Validates an incoming message without trusting its shape. */
+/** Validates an incoming message, including its payload, without trusting its shape. */
 export function parseMessage(value: unknown): MessageResult<Message> {
-  if (typeof value !== 'object' || value === null || !('type' in value)) {
-    return fail('malformed-message');
-  }
-  if (typeof value.type !== 'string') return fail('malformed-message');
+  if (!isRecord(value) || typeof value.type !== 'string') return fail('malformed-message');
   if (!MESSAGE_TYPES.has(value.type)) return fail('unknown-message');
-  return ok({ type: value.type as MessageType });
+  const type = value.type as MessageType;
+  const validate = PAYLOAD_VALIDATORS[type];
+  if (validate && !validate(value.payload)) return fail('malformed-message');
+  return ok(value as Message);
 }
 
 export function isMessageResult(value: unknown): value is MessageResult<unknown> {
-  if (typeof value !== 'object' || value === null || !('ok' in value)) return false;
-  return value.ok === true ? 'data' in value : 'error' in value && typeof value.error === 'string';
+  if (!isRecord(value) || !('ok' in value)) return false;
+  return value.ok === true ? 'data' in value : typeof value.error === 'string';
 }
 
 export function isPageScan(value: unknown): value is PageScan {
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    'title' in value &&
+    isRecord(value) &&
     typeof value.title === 'string' &&
-    'platform' in value &&
     typeof value.platform === 'string' &&
-    'fields' in value &&
     Array.isArray(value.fields) &&
-    'profileStatus' in value &&
-    (value.profileStatus === null || typeof value.profileStatus === 'object')
+    (value.profileStatus === null || isRecord(value.profileStatus))
+  );
+}
+
+export function isFillResultList(value: unknown): value is FillResult[] {
+  return (
+    Array.isArray(value) &&
+    value.every((r) => isRecord(r) && typeof r.fieldId === 'string' && typeof r.status === 'string')
   );
 }

@@ -1,3 +1,4 @@
+import type { FillInstruction, FillResult } from './fill';
 import type { FormField } from './form-field';
 
 /**
@@ -25,8 +26,15 @@ export interface FormAdapter<TRoot = unknown> {
    */
   getFields(context: AdapterContext<TRoot>): FormField[];
 
-  // TODO(phase-2): add fill(context, fieldId, value). Filling is adapter-specific
-  // (event dispatch, custom widgets) and must never submit the form.
+  /**
+   * Fills approved fields on the current page and returns one result per instruction, in
+   * order. Must re-locate each field (the page may have re-rendered since analysis), never
+   * throw for a single field, and never submit the form.
+   */
+  fillFields(
+    context: AdapterContext<TRoot>,
+    instructions: readonly FillInstruction[],
+  ): FillResult[];
 }
 
 export function selectAdapter<TRoot>(

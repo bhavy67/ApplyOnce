@@ -3,8 +3,9 @@
  * (activeTab + scripting) only after the user clicks "Analyze this page"; never declared
  * in the manifest.
  *
- * It does not modify the page, keep state between scans, or observe DOM changes. It
- * never receives profile values: only the profile status.
+ * It keeps no state between messages and never observes DOM changes. It never receives
+ * the profile: only the profile status, and, when the user clicks Fill, the approved
+ * field/value pairs. It changes the page only by filling those fields, and never submits.
  */
 import { genericAdapter } from '@applyonce/adapter-generic';
 import { greenhouseAdapter } from '@applyonce/adapter-greenhouse';
@@ -18,11 +19,13 @@ type Listener = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
 
 const SITE_ADAPTERS = [workdayAdapter, greenhouseAdapter];
 
+// TODO(phase-4/5): use the site adapter once Workday/Greenhouse extraction and filling
+// exist. Until then the generic adapter scans and fills on every page.
+const pageContext = () => ({ url: window.location.href, root: document });
+
 async function scanPage(): Promise<PageScan> {
-  const context = { url: window.location.href, root: document };
+  const context = pageContext();
   const platform = selectAdapter(SITE_ADAPTERS, genericAdapter, context).id;
-  // TODO(phase-4/5): use the site adapter's getFields once Workday/Greenhouse extraction
-  // exists. Until then generic extraction is used on every page.
   const fields = genericAdapter.getFields(context);
   const status = await sendToServiceWorker(MessageType.GetProfileStatus);
   return {
@@ -33,13 +36,14 @@ async function scanPage(): Promise<PageScan> {
   };
 }
 
-const listener: Listener = (message: unknown, _sender, sendResponse) => {
-  const parsed = parseMessage(message);
+const listener: Listener = (rawMessage: unknown, _sender, sendResponse) => {
+  const parsed = parseMessage(rawMessage);
   if (!parsed.ok) {
     sendResponse(parsed);
     return false;
   }
-  switch (parsed.data.type) {
+  const message = parsed.data;
+  switch (message.type) {
     case MessageType.Ping:
       sendResponse(ok({ ready: true }));
       return false;
@@ -52,6 +56,11 @@ const listener: Listener = (message: unknown, _sender, sendResponse) => {
         },
       );
       return true; // Async response.
+    case MessageType.FillFields:
+      sendResponse(
+        ok({ results: genericAdapter.fillFields(pageContext(), message.payload.instructions) }),
+      );
+      return false;
     default:
       sendResponse(fail('unknown-message'));
       return false;

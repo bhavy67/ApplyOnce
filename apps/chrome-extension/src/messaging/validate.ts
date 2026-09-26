@@ -1,0 +1,64 @@
+import { isFieldType, type FillInstruction, type FormField } from '@applyonce/core';
+
+/**
+ * Structural checks for message payloads. Messages only come from this extension, but a
+ * content script shares a process with the web page, so payloads are never trusted blindly.
+ */
+
+/** Upper bound on fields per message, far above any real form. */
+export const MAX_FIELDS_PER_MESSAGE = 2000;
+
+const SIGNAL_KEYS = [
+  'name',
+  'htmlId',
+  'label',
+  'ariaLabel',
+  'placeholder',
+  'autocomplete',
+  'nearbyText',
+];
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const isOptionalString = (value: unknown) => value === undefined || typeof value === 'string';
+
+export function isBoundedArray(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.length <= MAX_FIELDS_PER_MESSAGE;
+}
+
+export function isFormField(value: unknown): value is FormField {
+  if (!isRecord(value)) return false;
+  const { id, type, htmlType, required, visible, disabled, signals, form, options } = value;
+  return (
+    typeof id === 'string' &&
+    typeof type === 'string' &&
+    isFieldType(type) &&
+    typeof htmlType === 'string' &&
+    typeof required === 'boolean' &&
+    typeof visible === 'boolean' &&
+    typeof disabled === 'boolean' &&
+    isRecord(signals) &&
+    SIGNAL_KEYS.every((key) => isOptionalString(signals[key])) &&
+    (form === undefined ||
+      (isRecord(form) && ['id', 'name', 'action'].every((key) => isOptionalString(form[key])))) &&
+    (options === undefined ||
+      (isBoundedArray(options) &&
+        options.every(
+          (o) => isRecord(o) && typeof o.value === 'string' && typeof o.label === 'string',
+        )))
+  );
+}
+
+export function isFillInstruction(value: unknown): value is FillInstruction {
+  if (!isRecord(value) || !isRecord(value.expected)) return false;
+  const { fieldId, value: fillValue, expected } = value;
+  return (
+    typeof fieldId === 'string' &&
+    ['string', 'number', 'boolean'].includes(typeof fillValue) &&
+    typeof expected.type === 'string' &&
+    isFieldType(expected.type) &&
+    ['name', 'htmlId', 'label'].every((key) => isOptionalString(expected[key]))
+  );
+}

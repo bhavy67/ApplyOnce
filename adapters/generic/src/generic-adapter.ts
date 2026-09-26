@@ -1,4 +1,5 @@
 import type { FormAdapter } from '@applyonce/core';
+import { fillFields } from './fill-fields';
 import { scanFields } from './scan-fields';
 
 /**
@@ -11,4 +12,6 @@ export const genericAdapter: FormAdapter<ParentNode> = {
   detect: () => true,
 
   getFields: ({ root }) => scanFields(root),
+
+  fillFields: ({ root }, instructions) => fillFields(root, instructions),
 };

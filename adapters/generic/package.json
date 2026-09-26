@@ -10,7 +10,8 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@applyonce/core": "workspace:*"
+    "@applyonce/core": "workspace:*",
+    "@applyonce/field-mapper": "workspace:*"
   },
   "devDependencies": {
     "happy-dom": "catalog:",

@@ -17,4 +17,12 @@ export const workdayAdapter: FormAdapter<ParentNode> = {
     // page is identical; handle conditional sections and custom widgets.
     return [];
   },
+
+  fillFields: (_context, instructions) =>
+    // TODO(phase-4): Workday-specific filling (custom widgets, step awareness).
+    instructions.map(({ fieldId }) => ({
+      fieldId,
+      status: 'unsupported',
+      message: 'Workday filling is not available yet.',
+    })),
 };

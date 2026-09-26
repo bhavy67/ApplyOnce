@@ -5,11 +5,15 @@ export type MatchReason =
   | 'html-id'
   | 'label'
   | 'aria-label'
+  /** A multi-word alias appears inside a longer label, e.g. "Legal first name (as on ID)". */
+  | 'label-contains'
   | 'placeholder'
   | 'field-type'
   | 'nearby-text'
   | 'site-rule'
-  | 'user-mapping';
+  | 'user-mapping'
+  /** Another profile field also matched strongly, so confidence was lowered. */
+  | 'conflict';
 
 export type ConfidenceLevel = 'high' | 'review' | 'confirm' | 'unknown';
 

@@ -1,13 +1,26 @@
+import type { FillResult } from '@applyonce/core';
 import { useState } from 'react';
-import type { PageScan, ProfileStatus } from '../messaging/protocol';
-import { analyzeActiveTab, FAILURE_MESSAGES, summarizeFields } from './analyze-page';
-import { FieldList } from './FieldList';
+import type { PageScan, ProfileStatus, ReviewedMapping } from '../messaging/protocol';
+import {
+  analyzeActiveTab,
+  FAILURE_MESSAGES,
+  fillApprovedFields,
+  summarizeFields,
+} from './analyze-page';
+import { initialSelection, plural, summarizeFillResults, summarizeReview } from './review';
+import { ReviewList } from './ReviewList';
 
-type AnalysisState =
+interface Analysis {
+  tabId: number;
+  scan: PageScan;
+  mappings: ReviewedMapping[];
+}
+
+type PopupState =
   | { status: 'idle' }
   | { status: 'analyzing' }
-  | { status: 'done'; scan: PageScan }
-  | { status: 'failed'; message: string };
+  | { status: 'failed'; message: string }
+  | { status: 'ready'; analysis: Analysis };
 
 const PLATFORM_NAMES: Readonly<Record<string, string>> = {
   workday: 'Workday',
@@ -15,15 +28,17 @@ const PLATFORM_NAMES: Readonly<Record<string, string>> = {
 };
 
 export function Popup() {
-  const [state, setState] = useState<AnalysisState>({ status: 'idle' });
+  const [state, setState] = useState<PopupState>({ status: 'idle' });
+  const [analysisCount, setAnalysisCount] = useState(0);
 
   async function analyze() {
     setState({ status: 'analyzing' });
+    setAnalysisCount((count) => count + 1);
     try {
       const result = await analyzeActiveTab();
       setState(
         result.ok
-          ? { status: 'done', scan: result.scan }
+          ? { status: 'ready', analysis: result }
           : { status: 'failed', message: FAILURE_MESSAGES[result.reason] },
       );
     } catch {
@@ -38,11 +53,15 @@ export function Popup() {
 
       <button
         type="button"
-        className="primary"
+        className={state.status === 'ready' ? 'secondary' : 'primary'}
         disabled={state.status === 'analyzing'}
         onClick={() => void analyze()}
       >
-        {state.status === 'analyzing' ? 'Analyzing…' : 'Analyze this page'}
+        {state.status === 'analyzing'
+          ? 'Analyzing…'
+          : state.status === 'ready'
+            ? 'Analyze again'
+            : 'Analyze this page'}
       </button>
 
       {state.status === 'failed' && (
@@ -50,9 +69,10 @@ export function Popup() {
           {state.message}
         </p>
       )}
-      {state.status === 'done' && <AnalysisSummary scan={state.scan} />}
+      {/* Keyed so a new analysis starts with a fresh review. */}
+      {state.status === 'ready' && <AnalysisReview key={analysisCount} analysis={state.analysis} />}
 
-      <p className="note">Autofill is coming in a later phase.</p>
+      <p className="note">ApplyOnce never submits forms. Check the page before you submit.</p>
       <button
         type="button"
         className="secondary"
@@ -64,40 +84,101 @@ export function Popup() {
   );
 }
 
-function AnalysisSummary({ scan }: { scan: PageScan }) {
-  const [showFields, setShowFields] = useState(false);
-  const summary = summarizeFields(scan.fields);
+function AnalysisReview({ analysis }: { analysis: Analysis }) {
+  const { tabId, scan, mappings } = analysis;
+  const [selected, setSelected] = useState(() => initialSelection(mappings));
+  const [filling, setFilling] = useState(false);
+  const [results, setResults] = useState<FillResult[]>();
+  const [fillError, setFillError] = useState<string>();
+
+  const mappingsById = new Map(mappings.map((m) => [m.fieldId, m]));
+  const resultsById = new Map((results ?? []).map((r) => [r.fieldId, r]));
+  const detected = summarizeFields(scan.fields).detected;
+  const review = summarizeReview(mappings, selected);
   const platform = PLATFORM_NAMES[scan.platform];
+
+  function toggle(fieldId: string, isSelected: boolean) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (isSelected) next.add(fieldId);
+      else next.delete(fieldId);
+      return next;
+    });
+  }
+
+  async function fill() {
+    const approvals = scan.fields.flatMap((field) => {
+      const profileField = mappingsById.get(field.id)?.profileField;
+      return selected.has(field.id) && profileField ? [{ field, profileField }] : [];
+    });
+    setFilling(true);
+    setFillError(undefined);
+    try {
+      const filled = await fillApprovedFields(tabId, approvals);
+      if (filled) setResults(filled);
+      else setFillError('Filling failed. Analyze the page again and retry.');
+    } catch {
+      setFillError('Filling failed. Analyze the page again and retry.');
+    } finally {
+      setFilling(false);
+    }
+  }
+
+  const fillSummary = results && summarizeFillResults(results);
 
   return (
     <section className="analysis" aria-live="polite">
       {scan.title && <p className="page-title">{scan.title}</p>}
-      <p className="count">
-        {summary.detected} {summary.detected === 1 ? 'field' : 'fields'} detected
-      </p>
-      <dl className="stats">
-        <dt>Labeled</dt>
-        <dd>{summary.labeled}</dd>
-        <dt>Needs review</dt>
-        <dd>{summary.needsReview}</dd>
-        {summary.inactive > 0 && (
-          <>
-            <dt>Hidden or disabled</dt>
-            <dd>{summary.inactive}</dd>
-          </>
-        )}
-      </dl>
+      <p className="count">{plural(detected, 'field')} detected</p>
+
+      {fillSummary ? (
+        <p className="fill-summary" role="status">
+          {plural(fillSummary.filled, 'field')} filled
+          {fillSummary.skipped > 0 && ` · ${fillSummary.skipped} skipped`}
+          {fillSummary.failed > 0 && ` · ${fillSummary.failed} failed`}
+          {review.needsReview > 0 && ` · ${review.needsReview} need review`}
+        </p>
+      ) : (
+        <dl className="stats">
+          <dt>Ready to fill</dt>
+          <dd>{review.ready}</dd>
+          <dt>Needs review</dt>
+          <dd>{review.needsReview}</dd>
+          <dt>No value in profile</dt>
+          <dd>{review.missingValue}</dd>
+          <dt>Not recognized</dt>
+          <dd>{review.unknown}</dd>
+        </dl>
+      )}
+      {fillError && (
+        <p className="message error" role="alert">
+          {fillError}
+        </p>
+      )}
+
       {platform && (
         <p className="note">{platform} page detected. Site-specific support comes later.</p>
       )}
       <p className="profile-status">{describeProfile(scan.profileStatus)}</p>
+
+      <button
+        type="button"
+        className="primary"
+        disabled={filling || selected.size === 0}
+        onClick={() => void fill()}
+      >
+        {filling ? 'Filling…' : `Fill ${plural(selected.size, 'selected field')}`}
+      </button>
+
       {scan.fields.length > 0 && (
-        <>
-          <button type="button" className="link" onClick={() => setShowFields((s) => !s)}>
-            {showFields ? 'Hide fields' : 'View fields'}
-          </button>
-          {showFields && <FieldList fields={scan.fields} />}
-        </>
+        <ReviewList
+          fields={scan.fields}
+          mappings={mappingsById}
+          selected={selected}
+          results={resultsById}
+          disabled={filling}
+          onToggle={toggle}
+        />
       )}
     </section>
   );
@@ -105,6 +186,6 @@ function AnalysisSummary({ scan }: { scan: PageScan }) {
 
 function describeProfile(status: ProfileStatus | null): string {
   if (!status) return 'Your profile could not be loaded.';
-  if (!status.hasData) return 'No profile saved yet.';
-  return `Profile ready: ${status.valueCount} saved ${status.valueCount === 1 ? 'value' : 'values'}.`;
+  if (!status.hasData) return 'No profile saved yet. Add your details under Manage Profile.';
+  return `Profile ready: ${plural(status.valueCount, 'saved value')}.`;
 }

@@ -1,6 +1,6 @@
 {
   "name": "@applyonce/chrome-extension",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,6 +16,7 @@
     "@applyonce/adapter-greenhouse": "workspace:*",
     "@applyonce/adapter-workday": "workspace:*",
     "@applyonce/core": "workspace:*",
+    "@applyonce/field-mapper": "workspace:*",
     "@applyonce/profile": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:"

@@ -28,6 +28,7 @@ export const PROFILE_FIELD_KEYS = [
   'notice_period',
   'work_authorization',
   'requires_sponsorship',
+  'willing_to_relocate',
 ] as const;
 
 export type ProfileFieldKey = (typeof PROFILE_FIELD_KEYS)[number];
@@ -60,6 +61,10 @@ export const PROFILE_FIELDS: Readonly<Record<ProfileFieldKey, ProfileField>> = {
   work_authorization: { label: 'Work authorization', fieldTypes: ['text', 'select', 'radio'] },
   requires_sponsorship: {
     label: 'Requires sponsorship',
+    fieldTypes: ['radio', 'select', 'checkbox'],
+  },
+  willing_to_relocate: {
+    label: 'Willing to relocate',
     fieldTypes: ['radio', 'select', 'checkbox'],
   },
 };

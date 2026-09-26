@@ -6,7 +6,7 @@ body {
 }
 
 .popup {
-  width: 320px;
+  width: 360px;
   padding: 16px;
 }
 
@@ -95,34 +95,73 @@ body {
   font-size: 12px;
 }
 
-.field-list {
-  max-height: 260px;
+.fill-summary {
+  font-weight: 600;
+}
+
+.analysis button.primary {
+  margin: 4px 0 8px;
+}
+
+.review-list {
+  max-height: 300px;
   overflow-y: auto;
-  margin: 8px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.field-list li {
+.review-item label {
   display: flex;
-  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
   padding: 6px 0;
   border-top: 1px solid #eaeef2;
+}
+
+.review-item input {
+  margin-top: 3px;
+}
+
+.review-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .field-name {
   font-weight: 500;
 }
 
+.mapping,
 .field-meta,
-.field-flags {
+.review-item .note {
   color: #59636e;
   font-size: 12px;
-  word-break: break-all;
+  word-break: break-word;
 }
 
-.field-flags {
+.review-item .note {
+  margin: 0;
+}
+
+.status-review .note {
   color: #9a6700;
+}
+
+.status-unknown .field-name,
+.status-unsupported .field-name {
+  color: #59636e;
+}
+
+.review-item .note.result-filled {
+  color: #1a7f37;
+}
+
+.review-item .note.result-failed,
+.review-item .note.result-not-found,
+.review-item .note.result-unsupported {
+  color: #cf222e;
 }
 
 .note {

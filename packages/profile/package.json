@@ -9,6 +9,9 @@
   "scripts": {
     "typecheck": "tsc"
   },
+  "dependencies": {
+    "@applyonce/core": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "catalog:"
   }

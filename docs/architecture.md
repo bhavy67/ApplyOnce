@@ -3,17 +3,19 @@
 ## Package dependencies
 
 ```text
-apps/chrome-extension ──► adapters/* ──► packages/core
-          │                                   ▲
-          └──► packages/field-mapper ─────────┘
-          └──► packages/profile
+apps/chrome-extension ──► adapters/generic ──► packages/field-mapper ──► packages/core
+          │               adapters/workday, greenhouse ───────────────────► packages/core
+          ├──► packages/field-mapper
+          └──► packages/profile ──────────────────────────────────────────► packages/core
 ```
 
-- `packages/core` and `packages/profile` have no internal dependencies.
+- `packages/core` has no internal dependencies. `packages/profile` uses core's profile
+  field keys (to resolve a key such as `city` to `location.city`).
 - `packages/*` compile with `lib: ["ES2022"]` and no DOM or Node types, so using a browser
   API there is a type error. Keep them platform-independent.
-- `adapters/*` may use DOM types. Each adapter depends only on `core`, never on another
-  adapter, so Workday and Greenhouse logic can evolve independently.
+- `adapters/*` may use DOM types. Adapters depend on shared packages (`core`, and
+  `field-mapper` for text normalization), never on another adapter, so Workday and
+  Greenhouse logic can evolve independently.
 - Only `apps/chrome-extension` may use `chrome.*` APIs.
 
 ## Local persistence
@@ -45,16 +47,21 @@ apps/chrome-extension/src/profile-page   React UI; talks only to ProfileReposito
 
  ┌───────────────────────┐   tabs.sendMessage   ┌──────────────────────┐
  │ content script        │ ◄─── Ping/ScanPage ─ │ popup                │
- │  (isolated world,     │ ── PageScan ───────► │  Analyze this page   │
- │   injected on click)  │                      └──────────────────────┘
- │  generic adapter scan │
- └──────────┬────────────┘
-            │ runtime.sendMessage: GetProfileStatus
-            ▼
- ┌───────────────────────┐        ┌───────────────────┐       ┌───────────┐
- │ service worker        │ ─────► │ ProfileRepository │ ────► │ IndexedDB │
- │  message-handler.ts   │ ◄───── │ (Phase 1)         │ ◄──── │           │
- └───────────────────────┘        └───────────────────┘       └───────────┘
+ │  (isolated world,     │ ── PageScan ───────► │  analyze/review/fill │
+ │   injected on click)  │                      └──────────┬───────────┘
+ │  generic adapter:     │                                 │ MapFields
+ │  scan, fill           │ ◄── FillFields ──┐              │ FillPage
+ └──────────┬────────────┘  (approved pairs) │             │ (fields + approvals,
+            │ GetProfileStatus               │             │  never values)
+            ▼                                │             ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │ service worker (message-handler.ts)                         │
+ │  mapper (field-mapper) · value lookup (profile)             │
+ └───────────────┬─────────────────────────────────────────────┘
+                 ▼
+       ┌───────────────────┐       ┌───────────┐
+       │ ProfileRepository │ ────► │ IndexedDB │
+       └───────────────────┘       └───────────┘
             ▲
             │ GetProfile (extension pages only)
  ┌──────────┴────────────┐
@@ -62,20 +69,27 @@ apps/chrome-extension/src/profile-page   React UI; talks only to ProfileReposito
  └───────────────────────┘   (same origin as IndexedDB).
 ```
 
-- **Responsibilities.** The content script inspects the page. The service worker is the
-  only context that reads storage for other contexts. The popup handles user interaction
-  and orchestrates (active tab, injection, scan).
+- **Responsibilities.** The content script inspects and fills the page. The service
+  worker is the only context that reads storage for other contexts, runs the mapper, and
+  decides which values go to the page. The popup handles user interaction and
+  orchestrates (active tab, injection, scan, review).
 - **Protocol.** All message types live in `src/messaging/protocol.ts` (`MessageType`,
   per-type response payloads, `MessageResult` envelope with typed error codes). Incoming
   messages are validated with `parseMessage`; malformed or unknown messages get an error
   result, never an exception. `src/messaging/send.ts` wraps `chrome.runtime.sendMessage`
   and `chrome.tabs.sendMessage`, turning "no receiver" and malformed responses into error
   results.
-- **Profile exposure.** `GetProfile` returns the full profile only when the sender's URL
-  is an extension page. Content scripts share a renderer process with the web page, so
-  they only get `GetProfileStatus` (`{ hasData, valueCount }`). A later phase decides how
-  the few values needed for filling reach the page; the default plan is for the extension
-  side to map fields and send only those values.
+- **Profile exposure.** `GetProfile`, `MapFields`, and `FillPage` are accepted only when
+  the sender's URL is an extension page. Content scripts share a renderer process with the
+  web page, so they get `GetProfileStatus` (`{ hasData, valueCount }`) and, on Fill, a
+  `FillFields` message with only the approved field/value pairs. `MapFields` returns
+  `hasValue` flags, not values, so the popup never holds profile values either.
+- **Fill checks.** For each approval the service worker re-runs the mapper on the field
+  and requires the same profile field with status _mapped_ or _review_, checks the field
+  type can hold it, and looks up the value. Anything else becomes a result (failed,
+  unsupported, skipped) and is never sent to the page.
+- **Payload validation.** Every payload is structurally validated in `parseMessage`
+  (`messaging/validate.ts`); malformed payloads are rejected.
 - **Injection.** Only on user action, only into the active tab's top frame, only for
   http/https/file URLs. The popup pings first and injects `content.js` only when nothing
   answers. The script replaces its own listener if injected again, so there is never more
@@ -103,23 +117,30 @@ level (no `<form>` required). Each supported control becomes a `FormField` (core
 
 Radios with the same name in the same form become one field. Workday and Greenhouse
 adapters still only detect their URLs; the content script reports the detected platform
-but always extracts with the generic scanner for now.
+but always scans and fills with the generic adapter for now.
+
+`scanControls` returns the same fields with their current elements. Filling
+(`fill-fields.ts`) re-scans, finds each field by id, and requires its type and name/id (or
+label, when it has neither) to match what was analyzed, so re-rendered elements are found
+and replaced or removed ones are reported as not found. See the README for per-type rules.
 
 Scanner tests use HTML fixtures in `happy-dom` (dev dependency of `adapters/generic` only,
 enabled per test file).
 
-## Mapping pipeline (target shape)
+## Mapping pipeline
 
 ```text
-adapter.getFields(page)  →  FormField[]            (adapters, DOM-aware)
-createFieldSignature     →  FieldSignature          (field-mapper, normalized text)
-FieldMatcher.match       →  FieldMatch + confidence (field-mapper)
-mapFields                →  MappingResult           (mapped + unmapped field ids)
-review → fill current step → user submits           (extension, later phases)
+adapter.getFields(page)   →  FormField[]              (content script, DOM-aware)
+createFieldSignature      →  FieldSignature            (field-mapper, normalized text)
+FieldMatcher.match        →  FieldMatch + confidence   (alias matcher, reasons per point)
+mapFields                 →  one FieldMapping per field: mapped / review / unknown / unsupported
+getProfileValue           →  hasValue for review; the value itself only for approved fields
+user review → FillPage → adapter.fillFields → FillResult per field → user submits
 ```
 
-Only the adapter touches the DOM. `FormField` carries metadata, not element references, and
-does not capture values already typed into the page.
+Only adapters touch the DOM. `FormField` carries metadata, not element references, and
+does not capture values already typed into the page. Signal weights (`SIGNAL_WEIGHTS`,
+`CONFLICT_MIN_SCORE`) and thresholds (`CONFIDENCE_THRESHOLDS`) are provisional.
 
 ## Conventions
 

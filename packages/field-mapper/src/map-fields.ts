@@ -1,23 +1,51 @@
-import type { FieldMapping, FormField, MappingResult } from '@applyonce/core';
+import {
+  PROFILE_FIELDS,
+  type FieldMapping,
+  type FormField,
+  type MappingResult,
+  type UnsupportedReason,
+} from '@applyonce/core';
 import { createFieldSignature } from './field-signature';
 import type { FieldMatcher } from './matcher';
 
 /**
- * Map each field with the given matcher. Fields that cannot be matched, or only with
- * "unknown" confidence, are reported as unmapped so they stay untouched.
+ * One mapping per field, in field order:
+ *
+ * - no match, or "unknown" confidence → unknown (never filled)
+ * - matched, but the field is hidden, disabled, or cannot hold that kind of value
+ *   → unsupported
+ * - high confidence → mapped; anything lower → review (needs explicit approval)
  */
 export function mapFields(fields: readonly FormField[], matcher: FieldMatcher): MappingResult {
-  const mappings: FieldMapping[] = [];
-  const unmappedFieldIds: string[] = [];
+  return { mappings: fields.map((field) => mapField(field, matcher)) };
+}
 
-  for (const field of fields) {
-    const match = matcher.match(createFieldSignature(field));
-    if (!match || match.confidence.level === 'unknown') {
-      unmappedFieldIds.push(field.id);
-      continue;
-    }
-    mappings.push({ fieldId: field.id, ...match });
+function mapField(field: FormField, matcher: FieldMatcher): FieldMapping {
+  const match = matcher.match(createFieldSignature(field));
+  if (!match || match.confidence.level === 'unknown') {
+    return {
+      fieldId: field.id,
+      status: 'unknown',
+      confidence: match?.confidence ?? { score: 0, level: 'unknown', reasons: [] },
+    };
   }
 
-  return { mappings, unmappedFieldIds };
+  const mapping = {
+    fieldId: field.id,
+    profileField: match.profileField,
+    confidence: match.confidence,
+  };
+  const unsupportedReason = findUnsupportedReason(field, match.profileField);
+  if (unsupportedReason) return { ...mapping, status: 'unsupported', unsupportedReason };
+  return { ...mapping, status: match.confidence.level === 'high' ? 'mapped' : 'review' };
+}
+
+function findUnsupportedReason(
+  field: FormField,
+  profileField: keyof typeof PROFILE_FIELDS,
+): UnsupportedReason | undefined {
+  if (!PROFILE_FIELDS[profileField].fieldTypes.includes(field.type)) return 'incompatible-type';
+  if (!field.visible) return 'hidden';
+  if (field.disabled) return 'disabled';
+  return undefined;
 }

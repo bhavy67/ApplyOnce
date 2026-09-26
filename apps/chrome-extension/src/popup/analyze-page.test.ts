@@ -1,9 +1,10 @@
 import type { FormField } from '@applyonce/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MessageType, ok, type PageScan } from '../messaging/protocol';
+import { MessageType, ok, type PageScan, type ReviewedMapping } from '../messaging/protocol';
 import {
   analyzeActiveTab,
   fieldDisplayName,
+  fillApprovedFields,
   isAnalyzableUrl,
   summarizeFields,
 } from './analyze-page';
@@ -67,12 +68,23 @@ describe('analyzeActiveTab', () => {
     profileStatus: { hasData: true, valueCount: 3 },
   };
 
+  const mappings: ReviewedMapping[] = [
+    {
+      fieldId: 'f',
+      status: 'mapped',
+      profileField: 'email',
+      confidence: { score: 90, level: 'high', reasons: ['label', 'field-type'] },
+      hasValue: true,
+    },
+  ];
+
   interface FakeChromeOptions {
     tab?: { id?: number; url?: string };
     alreadyInjected?: boolean;
     injectionFails?: boolean;
     listensAfterInjection?: boolean;
     scanResponse?: unknown;
+    workerResponse?: unknown;
   }
 
   function stubChrome({
@@ -81,6 +93,7 @@ describe('analyzeActiveTab', () => {
     injectionFails = false,
     listensAfterInjection = true,
     scanResponse = ok(scan),
+    workerResponse = ok({ mappings }),
   }: FakeChromeOptions = {}) {
     let listening = alreadyInjected;
     const executeScript = vi.fn(() => {
@@ -94,21 +107,29 @@ describe('analyzeActiveTab', () => {
         message.type === MessageType.Ping ? ok({ ready: true }) : scanResponse,
       );
     });
+    const runtimeSendMessage = vi.fn<(message: unknown) => Promise<unknown>>(() =>
+      Promise.resolve(workerResponse),
+    );
     vi.stubGlobal('chrome', {
       tabs: { query: vi.fn(() => Promise.resolve(tab.id === undefined ? [] : [tab])), sendMessage },
       scripting: { executeScript },
+      runtime: { sendMessage: runtimeSendMessage },
     });
-    return { executeScript, sendMessage };
+    return { executeScript, sendMessage, runtimeSendMessage };
   }
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('injects the content script into the active tab, then scans once', async () => {
-    const { executeScript, sendMessage } = stubChrome();
+  it('injects the content script, scans once, then asks the service worker to map', async () => {
+    const { executeScript, sendMessage, runtimeSendMessage } = stubChrome();
 
-    expect(await analyzeActiveTab()).toEqual({ ok: true, scan });
+    expect(await analyzeActiveTab()).toEqual({ ok: true, tabId: 7, scan, mappings });
+    expect(runtimeSendMessage).toHaveBeenCalledExactlyOnceWith({
+      type: MessageType.MapFields,
+      payload: { fields: scan.fields },
+    });
     expect(executeScript).toHaveBeenCalledExactlyOnceWith({
       target: { tabId: 7 },
       files: ['content.js'],
@@ -153,4 +174,51 @@ describe('analyzeActiveTab', () => {
       expect(await analyzeActiveTab()).toEqual({ ok: false, reason: 'scan-failed' });
     },
   );
+});
+
+describe('analysis mapping and filling', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reports when the profile cannot be loaded for mapping', async () => {
+    vi.stubGlobal('chrome', {
+      tabs: {
+        query: () => Promise.resolve([{ id: 1, url: 'https://example.com' }]),
+        sendMessage: (_tabId: number, message: { type: string }) =>
+          Promise.resolve(
+            message.type === MessageType.Ping
+              ? ok({ ready: true })
+              : ok({ title: '', platform: 'generic', fields: [], profileStatus: null }),
+          ),
+      },
+      scripting: { executeScript: () => Promise.resolve([]) },
+      runtime: { sendMessage: () => Promise.resolve({ ok: false, error: 'profile-unavailable' }) },
+    });
+    expect(await analyzeActiveTab()).toEqual({ ok: false, reason: 'profile-unavailable' });
+  });
+
+  it('sends approvals (fields and profile field names, no values) to the service worker', async () => {
+    const results = [{ fieldId: 'f', status: 'filled', message: 'Filled.' }];
+    const sendMessage = vi.fn<(message: unknown) => Promise<unknown>>(() =>
+      Promise.resolve(ok({ results })),
+    );
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    const approvals = [
+      { field: field({ id: 'f', signals: { label: 'Email' } }), profileField: 'email' },
+    ];
+
+    expect(await fillApprovedFields(3, approvals)).toEqual(results);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith({
+      type: MessageType.FillPage,
+      payload: { tabId: 3, approvals },
+    });
+  });
+
+  it('returns undefined when filling fails', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: { sendMessage: () => Promise.reject(new Error('no service worker')) },
+    });
+    expect(await fillApprovedFields(3, [])).toBeUndefined();
+  });
 });

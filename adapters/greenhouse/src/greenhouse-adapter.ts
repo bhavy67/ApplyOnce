@@ -14,4 +14,12 @@ export const greenhouseAdapter: FormAdapter<ParentNode> = {
     // TODO(phase-5): field extraction, dropdowns, custom questions, step awareness.
     return [];
   },
+
+  fillFields: (_context, instructions) =>
+    // TODO(phase-5): Greenhouse-specific filling (custom widgets, step awareness).
+    instructions.map(({ fieldId }) => ({
+      fieldId,
+      status: 'unsupported',
+      message: 'Greenhouse filling is not available yet.',
+    })),
 };

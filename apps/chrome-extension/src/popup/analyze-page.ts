@@ -1,11 +1,25 @@
-import type { FormField } from '@applyonce/core';
-import { isPageScan, MessageType, type PageScan } from '../messaging/protocol';
-import { sendToTab } from '../messaging/send';
+import type { FillResult, FormField } from '@applyonce/core';
+import {
+  isFillResultList,
+  isPageScan,
+  MessageType,
+  type FieldApproval,
+  type PageScan,
+  type ReviewedMapping,
+} from '../messaging/protocol';
+import { sendToServiceWorker, sendToTab } from '../messaging/send';
 
 export type AnalysisFailure =
-  'no-active-tab' | 'unsupported-page' | 'injection-failed' | 'no-response' | 'scan-failed';
+  | 'no-active-tab'
+  | 'unsupported-page'
+  | 'injection-failed'
+  | 'no-response'
+  | 'scan-failed'
+  | 'profile-unavailable';
 
-export type AnalysisResult = { ok: true; scan: PageScan } | { ok: false; reason: AnalysisFailure };
+export type AnalysisResult =
+  | { ok: true; tabId: number; scan: PageScan; mappings: ReviewedMapping[] }
+  | { ok: false; reason: AnalysisFailure };
 
 export const FAILURE_MESSAGES: Readonly<Record<AnalysisFailure, string>> = {
   'no-active-tab': 'No active tab to analyze.',
@@ -14,6 +28,7 @@ export const FAILURE_MESSAGES: Readonly<Record<AnalysisFailure, string>> = {
   'injection-failed': 'This page cannot be analyzed.',
   'no-response': 'ApplyOnce could not reach this page. Try reloading it.',
   'scan-failed': 'Something went wrong while analyzing this page.',
+  'profile-unavailable': 'Your profile could not be loaded, so fields could not be matched.',
 };
 
 /** Sites where Chrome forbids extension scripts regardless of permissions. */
@@ -33,8 +48,9 @@ export function isAnalyzableUrl(url: string | undefined): boolean {
 }
 
 /**
- * Scans the active tab once. The content script is injected only if it is not already
- * running there (checked with a ping), so repeated clicks never stack scripts.
+ * Scans the active tab once, then asks the service worker to map the fields. Nothing is
+ * filled. The content script is injected only if it is not already running there (checked
+ * with a ping), so repeated clicks never stack scripts.
  */
 export async function analyzeActiveTab(): Promise<AnalysisResult> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -55,7 +71,23 @@ export async function analyzeActiveTab(): Promise<AnalysisResult> {
   if (!response.ok)
     return failure(response.error === 'no-receiver' ? 'no-response' : 'scan-failed');
   if (!isPageScan(response.data)) return failure('scan-failed');
-  return { ok: true, scan: response.data };
+  const scan = response.data;
+
+  const mapped = await sendToServiceWorker(MessageType.MapFields, { fields: scan.fields });
+  if (!mapped.ok) return failure('profile-unavailable');
+  return { ok: true, tabId: tab.id, scan, mappings: mapped.data.mappings };
+}
+
+/**
+ * Asks the service worker to fill the approved fields. The popup never handles profile
+ * values: the service worker looks them up and sends them to the page itself.
+ */
+export async function fillApprovedFields(
+  tabId: number,
+  approvals: FieldApproval[],
+): Promise<FillResult[] | undefined> {
+  const response = await sendToServiceWorker(MessageType.FillPage, { tabId, approvals });
+  return response.ok && isFillResultList(response.data.results) ? response.data.results : undefined;
 }
 
 function failure(reason: AnalysisFailure): AnalysisResult {
