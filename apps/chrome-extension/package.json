@@ -1,0 +1,30 @@
+{
+  "name": "@applyonce/chrome-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "pnpm clean && vite build && vite build -c vite.content.config.ts",
+    "dev": "pnpm clean && pnpm run \"/^watch:/\"",
+    "watch:app": "vite build --watch --mode development",
+    "watch:content": "vite build -c vite.content.config.ts --watch --mode development",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@applyonce/adapter-generic": "workspace:*",
+    "@applyonce/adapter-greenhouse": "workspace:*",
+    "@applyonce/adapter-workday": "workspace:*",
+    "@applyonce/core": "workspace:*",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/chrome": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

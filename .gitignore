@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+dist-ssr/
+build/
+*.tsbuildinfo
+coverage/
+
+# Vite
+.vite/
+vite.config.*.timestamp-*
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment files (never commit secrets or personal data)
+.env
+.env.*
+!.env.example
+
+# Packaged extension artifacts
+*.crx
+*.pem
+*.zip
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Android / Gradle (future android/ app)
+.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.jks
+*.keystore
+android/**/build/
+android/app/release/

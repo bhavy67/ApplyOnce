@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "ApplyOnce",
+  "version": "0.1.0",
+  "description": "Local-first personal autofill for repetitive forms.",
+  "action": {
+    "default_title": "ApplyOnce",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}

@@ -1,0 +1,27 @@
+packages:
+  - apps/*
+  - packages/*
+  - adapters/*
+
+# Single source of truth for shared dependency versions (referenced as "catalog:").
+catalog:
+  '@eslint/js': ^10.0.1
+  '@types/chrome': ^0.3.0
+  '@types/node': ^24.19.0
+  '@types/react': ^19.3.0
+  '@types/react-dom': ^19.3.0
+  '@vitejs/plugin-react': ^6.1.1
+  eslint: ^10.11.0
+  eslint-plugin-react-hooks: ^7.1.1
+  globals: ^17.12.0
+  prettier: ^3.9.9
+  react: ^19.3.0
+  react-dom: ^19.3.0
+  # Pinned to 6.0.x: typescript-eslint does not support TypeScript 7 yet.
+  typescript: ~6.0.3
+  typescript-eslint: ^8.70.1
+  vite: ^8.3.1
+  vitest: ^5.0.2
+
+minimumReleaseAgeExclude:
+  - '@types/node@24.19.0'
