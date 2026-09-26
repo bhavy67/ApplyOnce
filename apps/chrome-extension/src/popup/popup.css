@@ -2,19 +2,37 @@ body {
   margin: 0;
   font-family: system-ui, sans-serif;
   font-size: 14px;
+  color: #1f2328;
 }
 
 .popup {
-  width: 280px;
+  width: 240px;
   padding: 16px;
 }
 
 .popup h1 {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 18px;
 }
 
-.popup p {
-  margin: 0;
-  color: #555;
+.popup .tagline {
+  margin: 2px 0 12px;
+  color: #59636e;
+}
+
+.popup button {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #0969da;
+  border-radius: 6px;
+  background: #0969da;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.popup .note {
+  margin: 12px 0 0;
+  color: #59636e;
+  font-size: 12px;
 }

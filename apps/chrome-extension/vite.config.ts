@@ -3,7 +3,8 @@ import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
 /**
- * Builds the popup page and the background service worker (both ES modules).
+ * Builds the extension pages (popup, profile) and the background service worker, all as
+ * ES modules.
  * The content script has its own config because MV3 content scripts cannot be modules.
  * `dist/` is cleaned by the package scripts, since both builds write into it.
  */
@@ -15,6 +16,7 @@ export default defineConfig({
     rolldownOptions: {
       input: {
         popup: resolve(import.meta.dirname, 'popup.html'),
+        profile: resolve(import.meta.dirname, 'profile.html'),
         background: resolve(import.meta.dirname, 'src/background/service-worker.ts'),
       },
       output: {

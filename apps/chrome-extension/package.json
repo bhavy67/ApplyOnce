@@ -1,6 +1,6 @@
 {
   "name": "@applyonce/chrome-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,6 +16,7 @@
     "@applyonce/adapter-greenhouse": "workspace:*",
     "@applyonce/adapter-workday": "workspace:*",
     "@applyonce/core": "workspace:*",
+    "@applyonce/profile": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:"
   },
@@ -24,6 +25,7 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "fake-indexeddb": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:"
   }

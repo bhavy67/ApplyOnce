@@ -9,21 +9,21 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 0 — Foundation.** The repository, tooling, domain types, and extension skeleton exist.
-There is no working autofill yet. The extension builds and loads, and its popup shows a
-placeholder.
+**Phase 1 — Profile: complete.** You can create, edit, validate, save, and clear a personal
+profile in the extension. It is stored locally in the browser. There is no autofill yet.
 
-Next up: **Phase 1 — Profile** (profile editor, local persistence, validation).
+Next up: **Phase 2 — Generic Chrome autofill** (form detection, field extraction, filling).
 
 ## Repository structure
 
 ```text
 apps/
-  chrome-extension/     MV3 extension: popup (React), service worker, content script
+  chrome-extension/     MV3 extension: popup, profile page (React), IndexedDB storage,
+                        service worker, content script
 packages/
   core/                 Shared domain types: field types, form fields, profile field keys,
                         mappings, confidence, adapter interface, local storage interface
-  profile/              Personal profile data model
+  profile/              Personal profile model, validation, save-time sanitizing
   field-mapper/         Text normalization, field signatures, matcher interface,
                         basic deterministic alias matcher
 adapters/
@@ -74,6 +74,52 @@ pnpm install
 4. Click the ApplyOnce toolbar icon. After a rebuild, press the reload icon on the extension
    card.
 
+## The profile
+
+### Using the profile editor
+
+1. Click the ApplyOnce toolbar icon, then **Manage Profile**. (The profile page is also the
+   extension's options page: right-click the icon → **Options**.)
+2. Fill in whatever you want to reuse. Every field is optional.
+3. Press **Save profile** (or Enter). Invalid values are highlighted and nothing is saved
+   until they are fixed; otherwise "Profile saved" appears.
+4. **Clear profile…** asks for confirmation, then deletes the saved profile.
+
+Edits are held in memory until you save. Leaving the page with unsaved changes asks for
+confirmation.
+
+### Model and validation
+
+The model lives in `packages/profile` (`Profile`): identity, contact, location, education
+(list), experience (with a `workHistory` list), links, preferences, authorization, documents,
+and custom answers. The editor covers the first eight; documents, custom answers, and work
+history are in the model but have no UI yet, and are preserved when saving.
+
+- **Validation** (`validateProfile`) checks the format of values that are present: email,
+  phone, URLs, years of experience (0–70), graduation year (1950 to 10 years ahead). Blank
+  fields are always valid, so a partial profile can be saved.
+- **Completeness** (whether a profile has enough data for a given form) is a separate concern
+  and never blocks saving. It is not implemented yet.
+- **Sanitizing** (`sanitizeProfile`) runs on save: it trims text, removes blank values, and
+  drops empty education entries.
+
+### Where the data is stored
+
+In IndexedDB, in the extension's own origin (database `applyonce`, object store `records`,
+key `profile`). Data stays in this Chrome profile on this device and is deleted if the
+extension is uninstalled. Nothing is sent anywhere; there is no backend.
+
+Storage code lives only in the extension (`apps/chrome-extension/src/storage`), behind the
+`LocalStore` interface from `packages/core`. Two version numbers exist:
+
+- `Profile.schemaVersion` (currently 1): the shape of the profile. Loading a profile with an
+  unknown version fails loudly instead of discarding it; migrations will go in
+  `profile-repository.ts` when the version is bumped.
+- The IndexedDB database version: the object-store layout.
+
+To inspect stored data during development, open the profile page, then DevTools →
+Application → IndexedDB → `applyonce`.
+
 ## How the packages are built
 
 Workspace packages are internal and export their TypeScript source directly
@@ -81,8 +127,8 @@ Workspace packages are internal and export their TypeScript source directly
 type-checked individually and bundled by Vite into the extension. Tests import them the same
 way.
 
-The extension uses two Vite configs: `vite.config.ts` builds the popup and service worker (ES
-modules), and `vite.content.config.ts` builds the content script as a single classic script,
+The extension uses two Vite configs: `vite.config.ts` builds the popup, the profile page, and
+the service worker (ES modules), and `vite.content.config.ts` builds the content script as a single classic script,
 because MV3 content scripts cannot be ES modules.
 
 ## Privacy and security conventions
@@ -97,10 +143,13 @@ because MV3 content scripts cannot be ES modules.
 ## Intentionally not implemented yet
 
 - Form field extraction and filling (generic, Workday, Greenhouse adapters are stubs)
-- Profile editor UI and local persistence (only the `LocalStore` interface exists)
-- Resolving a profile field key to a profile value
+- Resolving a profile field key to a profile value, and giving content scripts access to the
+  profile (they cannot read the extension's IndexedDB directly)
+- Profile completeness checks
+- Editing work history, documents, and custom answers in the UI
+- Encryption at rest of the local profile
 - Confidence review UI, manual mapping, "Teach Once" saved mappings
 - Android app (`android/` will be added in Phase 7)
 - Encrypted sync, backend, accounts
 - AI-based field mapping
-- CI (GitHub Actions), Playwright and DOM fixture tests
+- CI (GitHub Actions), Playwright and DOM fixture tests, React component tests

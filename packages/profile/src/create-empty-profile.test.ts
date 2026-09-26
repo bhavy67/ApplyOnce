@@ -1,14 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyProfile, PROFILE_SCHEMA_VERSION } from './index';
+import { createEmptyProfile, PROFILE_SCHEMA_VERSION, type Profile } from './index';
 
 describe('createEmptyProfile', () => {
-  it('creates a profile with the current schema version and no values', () => {
-    const profile = createEmptyProfile();
-
-    expect(profile.schemaVersion).toBe(PROFILE_SCHEMA_VERSION);
-    expect(profile.identity).toEqual({});
-    expect(profile.experience.workHistory).toEqual([]);
-    expect(profile.customAnswers).toEqual([]);
+  it('creates every section with no personal values', () => {
+    expect(createEmptyProfile()).toEqual({
+      schemaVersion: PROFILE_SCHEMA_VERSION,
+      identity: {},
+      contact: {},
+      location: {},
+      education: [],
+      experience: { workHistory: [] },
+      links: {},
+      preferences: {},
+      authorization: {},
+      documents: { resumes: [], coverLetters: [] },
+      customAnswers: [],
+    });
   });
 
   it('returns independent instances', () => {
@@ -17,5 +24,17 @@ describe('createEmptyProfile', () => {
     a.education.push({ institution: 'Example University' });
 
     expect(b.education).toEqual([]);
+  });
+
+  it('can represent a partially completed profile', () => {
+    const profile: Profile = {
+      ...createEmptyProfile(),
+      identity: { firstName: 'Jane' },
+      contact: { email: 'jane@example.com' },
+      preferences: { workModes: ['remote', 'hybrid'] },
+    };
+
+    expect(profile.identity.lastName).toBeUndefined();
+    expect(profile.location).toEqual({});
   });
 });

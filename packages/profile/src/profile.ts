@@ -77,8 +77,11 @@ export interface Links {
   portfolio?: string;
 }
 
-export type WorkMode = 'remote' | 'hybrid' | 'onsite';
-export type EmploymentType = 'full-time' | 'part-time' | 'contract' | 'internship';
+export const WORK_MODES = ['remote', 'hybrid', 'onsite'] as const;
+export type WorkMode = (typeof WORK_MODES)[number];
+
+export const EMPLOYMENT_TYPES = ['full-time', 'part-time', 'contract', 'internship'] as const;
+export type EmploymentType = (typeof EMPLOYMENT_TYPES)[number];
 
 export interface Preferences {
   workModes?: WorkMode[];
