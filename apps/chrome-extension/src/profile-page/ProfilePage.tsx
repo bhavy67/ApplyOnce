@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { ProfileRepository } from '../storage';
-import { ClearProfileDialog } from './ClearProfileDialog';
+import { ConfirmDialog } from './ConfirmDialog';
 import { ProfileForm } from './ProfileForm';
+import { SavedMappingsSection } from './SavedMappingsSection';
 import { useProfileEditor } from './use-profile-editor';
 
 export function ProfilePage({ repository }: { repository: ProfileRepository }) {
@@ -71,7 +72,10 @@ export function ProfilePage({ repository }: { repository: ProfileRepository }) {
         </div>
       </form>
 
-      <ClearProfileDialog
+      <ConfirmDialog
+        title="Clear your saved profile?"
+        body="This permanently removes your profile from this browser. Saved field mappings are kept."
+        confirmLabel="Clear Profile"
         open={confirmingClear}
         onCancel={() => setConfirmingClear(false)}
         onConfirm={() => {
@@ -79,6 +83,7 @@ export function ProfilePage({ repository }: { repository: ProfileRepository }) {
           void editor.clear();
         }}
       />
+      <SavedMappingsSection />
     </main>
   );
 }

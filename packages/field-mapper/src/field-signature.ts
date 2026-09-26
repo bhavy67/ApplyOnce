@@ -2,8 +2,8 @@ import type { FieldType, FormField } from '@applyonce/core';
 import { normalizeText } from './normalize';
 
 /**
- * Normalized view of a form field's signals: the input to matching, and the basis for
- * recognizing the same field again when the user teaches a mapping (spec §20).
+ * Normalized view of a form field's signals: the input to matching and to the saved
+ * mapping key (see mapping-key.ts).
  */
 export interface FieldSignature {
   fieldType: FieldType;
@@ -37,16 +37,6 @@ export function createFieldSignature(field: FormField): FieldSignature {
     nearbyText: normalizeOptional(signals.nearbyText),
     autocomplete: signals.autocomplete?.trim().toLowerCase().split(/\s+/).at(-1) || undefined,
   };
-}
-
-/**
- * Stable key for a field, for storing user-taught mappings.
- * TODO(phase-6): validate which signals are stable across real Workday/Greenhouse visits.
- */
-export function toSignatureKey(signature: FieldSignature): string {
-  const text = signature.label ?? signature.ariaLabel ?? signature.placeholder ?? '';
-  const identifier = signature.name ?? signature.htmlId ?? '';
-  return [signature.fieldType, text, identifier].join('|');
 }
 
 function normalizeOptional(value: string | undefined): string | undefined {

@@ -1,48 +1,112 @@
 import {
   PROFILE_FIELDS,
+  type ConfidenceResult,
   type FieldMapping,
   type FormField,
   type MappingResult,
+  type ProfileFieldKey,
+  type SavedMapping,
   type UnsupportedReason,
 } from '@applyonce/core';
 import { createFieldSignature } from './field-signature';
+import { createMappingKey } from './mapping-key';
 import type { FieldMatcher } from './matcher';
 
+/** Saved mappings by key. */
+export type SavedMappingLookup = ReadonlyMap<string, SavedMapping>;
+
+const TAUGHT_CONFIDENCE: ConfidenceResult = {
+  score: 100,
+  level: 'high',
+  reasons: ['user-mapping'],
+};
+
 /**
- * One mapping per field, in field order:
+ * One mapping per field, in field order. Precedence:
  *
- * - no match, or "unknown" confidence → unknown (never filled)
- * - matched, but the field is hidden, disabled, or cannot hold that kind of value
- *   → unsupported
- * - high confidence → mapped; anything lower → review (needs explicit approval)
+ * 1. A saved mapping with this field's exact key, if its profile field suits the field
+ *    type → taught. A saved mapping that does not fit is ignored.
+ * 2. The deterministic matcher: high confidence → mapped; lower → review.
+ * 3. Otherwise → unknown (never filled).
+ *
+ * A match the field cannot currently be filled with (hidden, disabled, or the wrong kind
+ * of field) is reported as unsupported, whatever its source.
  */
-export function mapFields(fields: readonly FormField[], matcher: FieldMatcher): MappingResult {
-  return { mappings: fields.map((field) => mapField(field, matcher)) };
+export function mapFields(
+  fields: readonly FormField[],
+  matcher: FieldMatcher,
+  savedMappings: SavedMappingLookup = new Map(),
+): MappingResult {
+  return { mappings: fields.map((field) => mapField(field, matcher, savedMappings)) };
 }
 
-function mapField(field: FormField, matcher: FieldMatcher): FieldMapping {
+function mapField(
+  field: FormField,
+  matcher: FieldMatcher,
+  savedMappings: SavedMappingLookup,
+): FieldMapping {
+  const mappingKey = createMappingKey(field);
+  const base = { fieldId: field.id, ...(mappingKey ? { mappingKey } : {}) };
+
+  const saved = mappingKey ? savedMappings.get(mappingKey) : undefined;
+  if (saved && isUsableSavedMapping(saved, field)) {
+    return withStatus(
+      {
+        ...base,
+        source: 'taught',
+        profileField: saved.profileField,
+        confidence: TAUGHT_CONFIDENCE,
+      },
+      field,
+      'taught',
+    );
+  }
+
   const match = matcher.match(createFieldSignature(field));
   if (!match || match.confidence.level === 'unknown') {
     return {
-      fieldId: field.id,
+      ...base,
       status: 'unknown',
+      source: 'automatic',
       confidence: match?.confidence ?? { score: 0, level: 'unknown', reasons: [] },
     };
   }
+  return withStatus(
+    {
+      ...base,
+      source: 'automatic',
+      profileField: match.profileField,
+      confidence: match.confidence,
+    },
+    field,
+    match.confidence.level === 'high' ? 'mapped' : 'review',
+  );
+}
 
-  const mapping = {
-    fieldId: field.id,
-    profileField: match.profileField,
-    confidence: match.confidence,
-  };
-  const unsupportedReason = findUnsupportedReason(field, match.profileField);
-  if (unsupportedReason) return { ...mapping, status: 'unsupported', unsupportedReason };
-  return { ...mapping, status: match.confidence.level === 'high' ? 'mapped' : 'review' };
+/** Saved data is re-validated on every use: same field type, and a type that can hold it. */
+function isUsableSavedMapping(saved: SavedMapping, field: FormField): boolean {
+  const definition = Object.hasOwn(PROFILE_FIELDS, saved.profileField)
+    ? PROFILE_FIELDS[saved.profileField]
+    : undefined;
+  return (
+    saved.parts.fieldType === field.type && definition?.fieldTypes.includes(field.type) === true
+  );
+}
+
+function withStatus(
+  mapping: Omit<FieldMapping, 'status'> & { profileField: ProfileFieldKey },
+  field: FormField,
+  status: 'mapped' | 'review' | 'taught',
+): FieldMapping {
+  const unsupportedReason = findUnsupportedReason(field, mapping.profileField);
+  return unsupportedReason
+    ? { ...mapping, status: 'unsupported', unsupportedReason }
+    : { ...mapping, status };
 }
 
 function findUnsupportedReason(
   field: FormField,
-  profileField: keyof typeof PROFILE_FIELDS,
+  profileField: ProfileFieldKey,
 ): UnsupportedReason | undefined {
   if (!PROFILE_FIELDS[profileField].fieldTypes.includes(field.type)) return 'incompatible-type';
   if (!field.visible) return 'hidden';

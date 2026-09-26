@@ -1,6 +1,19 @@
-import type { FieldMapping, FillInstruction, FillResult, FormField } from '@applyonce/core';
+import type {
+  FieldMapping,
+  FillInstruction,
+  FillResult,
+  FormField,
+  SavedMapping,
+} from '@applyonce/core';
 import type { Profile } from '@applyonce/profile';
-import { isBoundedArray, isFillInstruction, isFormField, isRecord } from './validate';
+import {
+  isBoundedArray,
+  isFillInstruction,
+  isFormField,
+  isHostname,
+  isMappingKey,
+  isRecord,
+} from './validate';
 
 /**
  * Every message exchanged between extension contexts. Messages never leave the
@@ -11,6 +24,7 @@ import { isBoundedArray, isFillInstruction, isFormField, isRecord } from './vali
  *   popup ──MapFields/FillPage──► service worker
  *   service worker ──FillFields──► content script        (approved values only)
  *   extension pages ──GetProfile──► service worker
+ *   extension pages ──SaveMapping/ListMappings/DeleteMapping/ClearMappings──► service worker
  */
 export const MessageType = {
   /** Is the content script already present in this tab? */
@@ -27,6 +41,12 @@ export const MessageType = {
   FillPage: 'applyonce/fill-page',
   /** Service worker → content script: write these approved values into the page. */
   FillFields: 'applyonce/fill-fields',
+  /** Teach Once: save (or replace) the mapping for a field. Extension pages only. */
+  SaveMapping: 'applyonce/save-mapping',
+  /** Saved mappings, for the management view. Extension pages only. */
+  ListMappings: 'applyonce/list-mappings',
+  DeleteMapping: 'applyonce/delete-mapping',
+  ClearMappings: 'applyonce/clear-mappings',
 } as const;
 
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
@@ -65,6 +85,10 @@ export interface PayloadByType {
   [MessageType.MapFields]: { fields: FormField[] };
   [MessageType.FillPage]: { tabId: number; approvals: FieldApproval[] };
   [MessageType.FillFields]: { instructions: FillInstruction[] };
+  [MessageType.SaveMapping]: { field: FormField; profileField: string; site?: string };
+  [MessageType.ListMappings]: undefined;
+  [MessageType.DeleteMapping]: { key: string };
+  [MessageType.ClearMappings]: undefined;
 }
 
 /** Response payload for each message type. */
@@ -76,6 +100,11 @@ export interface ResponseDataByType {
   [MessageType.MapFields]: { mappings: ReviewedMapping[] };
   [MessageType.FillPage]: { results: FillResult[] };
   [MessageType.FillFields]: { results: FillResult[] };
+  /** The field's mapping after teaching, ready to replace the one under review. */
+  [MessageType.SaveMapping]: { mapping: ReviewedMapping };
+  [MessageType.ListMappings]: { mappings: SavedMapping[] };
+  [MessageType.DeleteMapping]: { deleted: boolean };
+  [MessageType.ClearMappings]: { cleared: true };
 }
 
 export type Message<T extends MessageType = MessageType> = T extends MessageType
@@ -97,6 +126,9 @@ export type MessageError =
   | 'unknown-message'
   | 'forbidden'
   | 'profile-unavailable'
+  /** A mapping that cannot be saved: not a profile field, wrong field type, or unkeyable field. */
+  | 'invalid-mapping'
+  | 'mappings-unavailable'
   | 'internal-error'
   /** Nobody answered (e.g. no content script in the tab). */
   | 'no-receiver'
@@ -126,6 +158,12 @@ const PAYLOAD_VALIDATORS: Partial<Record<MessageType, (payload: unknown) => bool
     ),
   [MessageType.FillFields]: (p) =>
     isRecord(p) && isBoundedArray(p.instructions) && p.instructions.every(isFillInstruction),
+  [MessageType.SaveMapping]: (p) =>
+    isRecord(p) &&
+    isFormField(p.field) &&
+    typeof p.profileField === 'string' &&
+    (p.site === undefined || isHostname(p.site)),
+  [MessageType.DeleteMapping]: (p) => isRecord(p) && isMappingKey(p.key),
 };
 
 const MESSAGE_TYPES: ReadonlySet<string> = new Set(Object.values(MessageType));

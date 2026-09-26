@@ -2,13 +2,14 @@ import type { FieldType, FillInstruction, FormField } from '@applyonce/core';
 import { createEmptyProfile, type Profile } from '@applyonce/profile';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { MessageType } from '../messaging/protocol';
+import { MessageType, type ReviewedMapping } from '../messaging/protocol';
 import { createIndexedDbStore } from '../storage/indexeddb-store';
 import {
   createProfileRepository,
   type ExtensionStorageSchema,
   type ProfileRepository,
 } from '../storage/profile-repository';
+import { createSavedMappingRepository } from '../storage/saved-mapping-repository';
 import { createServiceWorkerMessageHandler, type FillInTab } from './message-handler';
 
 const ORIGIN = 'chrome-extension://abcdefghijklmnop/';
@@ -76,10 +77,11 @@ async function setup(saved?: Profile, fillInTab: FillInTab = recordingFillInTab(
   const removals = vi.spyOn(store, 'remove');
   const handle = createServiceWorkerMessageHandler({
     repository: createProfileRepository(store),
+    mappings: createSavedMappingRepository(store),
     extensionOrigin: ORIGIN,
     fillInTab,
   });
-  return { handle, writes, removals };
+  return { handle, writes, removals, store };
 }
 
 describe('GetProfile', () => {
@@ -159,6 +161,12 @@ describe('failures and side effects', () => {
     };
     const handle = createServiceWorkerMessageHandler({
       repository: failingRepository,
+      mappings: createSavedMappingRepository(
+        createIndexedDbStore<ExtensionStorageSchema>({
+          databaseName: 'x',
+          factory: new IDBFactory(),
+        }),
+      ),
       extensionOrigin: ORIGIN,
       fillInTab: recordingFillInTab().fillInTab,
     });
@@ -372,6 +380,203 @@ describe('FillPage', () => {
     expect(await handle({ type: MessageType.FillPage, payload }, EXTENSION_PAGE)).toEqual({
       ok: false,
       error: 'malformed-message',
+    });
+  });
+});
+
+describe('Teach Once: SaveMapping, ListMappings, DeleteMapping, ClearMappings', () => {
+  const preferred = field('id:pref', 'text', {
+    htmlId: 'pref',
+    name: 'q17',
+    label: 'Preferred Working Location',
+  });
+  const save = (target: FormField, profileField: string, site?: string) => ({
+    type: MessageType.SaveMapping,
+    payload: { field: target, profileField, ...(site ? { site } : {}) },
+  });
+  const mapOne = async (handle: Awaited<ReturnType<typeof setup>>['handle'], target: FormField) => {
+    const response = await handle(
+      { type: MessageType.MapFields, payload: { fields: [target] } },
+      EXTENSION_PAGE,
+    );
+    return response.ok ? (response.data as { mappings: ReviewedMapping[] }).mappings[0] : undefined;
+  };
+  const fillOne = (target: FormField, profileField: string) => ({
+    type: MessageType.FillPage,
+    payload: { tabId: 7, approvals: [{ field: target, profileField }] },
+  });
+
+  it('teaches an unknown field; the current result updates and nothing is filled', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(sampleProfile, fillInTab);
+    expect(await mapOne(handle, preferred)).toMatchObject({
+      status: 'unknown',
+      source: 'automatic',
+    });
+
+    const response = await handle(save(preferred, 'city', 'jobs.example.com'), EXTENSION_PAGE);
+
+    expect(response).toEqual({
+      ok: true,
+      data: {
+        mapping: expect.objectContaining({
+          fieldId: 'id:pref',
+          status: 'taught',
+          source: 'taught',
+          profileField: 'city',
+          hasValue: true,
+        }),
+      },
+    });
+    expect(calls).toEqual([]);
+    expect(await mapOne(handle, preferred)).toMatchObject({
+      status: 'taught',
+      profileField: 'city',
+    });
+  });
+
+  it('teaches a review-level field', async () => {
+    const { handle } = await setup(sampleProfile);
+    expect((await mapOne(handle, FIELDS.phone))?.status).toBe('review');
+    await handle(save(FIELDS.phone, 'phone'), EXTENSION_PAGE);
+    expect(await mapOne(handle, FIELDS.phone)).toMatchObject({
+      status: 'taught',
+      profileField: 'phone',
+    });
+  });
+
+  it('applies a taught mapping to the same question on another site, but not to different questions', async () => {
+    const { handle } = await setup(sampleProfile);
+    await handle(save(preferred, 'city'), EXTENSION_PAGE);
+    const elsewhere = field('name:location', 'text', {
+      name: 'location',
+      label: 'Preferred working location:',
+    });
+    const different = field('id:cur', 'text', { htmlId: 'cur', label: 'Current location' });
+
+    expect((await mapOne(handle, elsewhere))?.status).toBe('taught');
+    expect((await mapOne(handle, different))?.status).toBe('unknown');
+  });
+
+  it('fills a taught field only after explicit approval, with only its value', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(sampleProfile, fillInTab);
+    await handle(save(preferred, 'city'), EXTENSION_PAGE);
+
+    expect(await handle(fillOne(preferred, 'city'), EXTENSION_PAGE)).toMatchObject({
+      ok: true,
+      data: { results: [{ fieldId: 'id:pref', status: 'filled' }] },
+    });
+    expect(calls.map((c) => c.instructions.map((i) => i.value))).toEqual([['Springfield']]);
+  });
+
+  it('re-mapping replaces the previous target, which is then refused', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(sampleProfile, fillInTab);
+    await handle(save(preferred, 'city'), EXTENSION_PAGE);
+    await handle(save(preferred, 'full_name'), EXTENSION_PAGE);
+
+    const listed = await handle({ type: MessageType.ListMappings }, EXTENSION_PAGE);
+    expect(listed).toMatchObject({ ok: true, data: { mappings: [{ profileField: 'full_name' }] } });
+    expect(await mapOne(handle, preferred)).toMatchObject({
+      status: 'taught',
+      profileField: 'full_name',
+    });
+
+    const stale = await handle(fillOne(preferred, 'city'), EXTENSION_PAGE);
+    expect(stale).toMatchObject({ data: { results: [{ status: 'failed' }] } });
+    await handle(fillOne(preferred, 'full_name'), EXTENSION_PAGE);
+    expect(calls.map((c) => c.instructions.map((i) => i.value))).toEqual([['Jane Doe']]);
+  });
+
+  it('after deletion the mapping is no longer used and deterministic mapping resumes', async () => {
+    const { handle } = await setup(sampleProfile);
+    await handle(save(FIELDS.email, 'email'), EXTENSION_PAGE);
+    const taught = await mapOne(handle, FIELDS.email);
+    expect(taught).toMatchObject({ status: 'taught' });
+
+    const deleted = await handle(
+      { type: MessageType.DeleteMapping, payload: { key: taught?.mappingKey } },
+      EXTENSION_PAGE,
+    );
+    expect(deleted).toEqual({ ok: true, data: { deleted: true } });
+    expect(await mapOne(handle, FIELDS.email)).toMatchObject({
+      status: 'mapped',
+      source: 'automatic',
+    });
+    // A taught approval made before deletion is no longer honoured for unknown fields.
+    await handle(save(preferred, 'city'), EXTENSION_PAGE);
+    await handle({ type: MessageType.ClearMappings }, EXTENSION_PAGE);
+    expect(await handle(fillOne(preferred, 'city'), EXTENSION_PAGE)).toMatchObject({
+      data: { results: [{ status: 'failed' }] },
+    });
+  });
+
+  it('does not delete or change profile values', async () => {
+    const { handle, store } = await setup(sampleProfile);
+    await handle(save(preferred, 'city'), EXTENSION_PAGE);
+    await handle({ type: MessageType.ClearMappings }, EXTENSION_PAGE);
+    expect(await store.get('profile')).toEqual(sampleProfile);
+  });
+
+  it.each([
+    ['favourite_colour', preferred],
+    ['location.city', preferred],
+    ['email', field('name:r', 'radio', { name: 'r', label: 'Contact me?' })],
+    ['city', field('index:3', 'text', {})],
+  ])('rejects invalid target %j and stores nothing', async (profileField, target) => {
+    const { handle, store } = await setup(sampleProfile);
+    expect(await handle(save(target, profileField), EXTENSION_PAGE)).toEqual({
+      ok: false,
+      error: 'invalid-mapping',
+    });
+    expect(await store.get('savedMappings')).toBeUndefined();
+  });
+
+  it('stores no profile values in the saved mapping', async () => {
+    const { handle, store } = await setup(sampleProfile);
+    await handle(save(preferred, 'city', 'jobs.example.com'), EXTENSION_PAGE);
+    const stored = JSON.stringify(await store.get('savedMappings'));
+    for (const value of SENSITIVE_VALUES) expect(stored).not.toContain(value);
+  });
+
+  it.each([
+    [MessageType.SaveMapping, { field: preferred, profileField: 'city' }],
+    [MessageType.ListMappings, undefined],
+    [MessageType.DeleteMapping, { key: 'v1|text|q=x|c=|i=' }],
+    [MessageType.ClearMappings, undefined],
+  ])('refuses %s from content scripts', async (type, payload) => {
+    const { handle, store } = await setup(sampleProfile);
+    const message = payload === undefined ? { type } : { type, payload };
+    expect(await handle(message, WEB_PAGE)).toEqual({ ok: false, error: 'forbidden' });
+    expect(await store.get('savedMappings')).toBeUndefined();
+  });
+
+  it.each([
+    [MessageType.SaveMapping, { field: {}, profileField: 'city' }],
+    [MessageType.SaveMapping, { field: preferred, profileField: 7 }],
+    [MessageType.SaveMapping, { field: preferred, profileField: 'city', site: 'https://x.com/a' }],
+    [MessageType.DeleteMapping, { key: 42 }],
+    [MessageType.DeleteMapping, { key: 'not-a-key' }],
+    [MessageType.DeleteMapping, undefined],
+  ])('rejects malformed %s payload %j', async (type, payload) => {
+    const { handle } = await setup();
+    expect(await handle({ type, payload }, EXTENSION_PAGE)).toEqual({
+      ok: false,
+      error: 'malformed-message',
+    });
+  });
+
+  it('keeps working without taught mappings when saved mappings cannot be read', async () => {
+    const { handle, store } = await setup(sampleProfile);
+    await store.set('savedMappings', {
+      version: 99,
+      mappings: [],
+    } as unknown as ExtensionStorageSchema['savedMappings']);
+    expect(await mapOne(handle, FIELDS.email)).toMatchObject({ status: 'mapped' });
+    expect(await handle({ type: MessageType.ListMappings }, EXTENSION_PAGE)).toEqual({
+      ok: false,
+      error: 'mappings-unavailable',
     });
   });
 });

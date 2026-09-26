@@ -1,6 +1,12 @@
-import type { FieldType, FormField } from '@applyonce/core';
+import type { FieldType, FormField, SavedMapping } from '@applyonce/core';
 import { describe, expect, it } from 'vitest';
-import { createAliasMatcher, createFieldSignature, mapFields, toSignatureKey } from './index';
+import {
+  createAliasMatcher,
+  createFieldSignature,
+  createMappingKey,
+  createMappingKeyParts,
+  mapFields,
+} from './index';
 
 let nextId = 0;
 function field(
@@ -151,6 +157,8 @@ describe('mapFields', () => {
       {
         fieldId: custom.id,
         status: 'unknown',
+        source: 'automatic',
+        mappingKey: 'v1|textarea|q=why do you want to work here|c=|i=',
         confidence: { score: 0, level: 'unknown', reasons: [] },
       },
     ]);
@@ -175,14 +183,76 @@ describe('mapFields', () => {
   });
 });
 
-describe('toSignatureKey', () => {
-  it('produces the same key for the same field with different formatting', () => {
-    const a = createFieldSignature(
-      field('text', { label: 'Notice Period*', name: 'notice_period' }),
-    );
-    const b = createFieldSignature(
-      field('text', { label: ' notice period ', name: 'notice period' }),
-    );
-    expect(toSignatureKey(a)).toBe(toSignatureKey(b));
+describe('saved (taught) mappings', () => {
+  const preferred = () => field('text', { label: 'Preferred Working Location', name: 'q17' });
+  const now = '2026-09-26T00:00:00.000Z';
+  function savedFor(
+    f: FormField,
+    profileField: SavedMapping['profileField'],
+  ): ReadonlyMap<string, SavedMapping> {
+    const parts = createMappingKeyParts(f);
+    const key = createMappingKey(f);
+    if (!parts || !key) throw new Error('field has no key');
+    return new Map([[key, { key, parts, profileField, createdAt: now, updatedAt: now }]]);
+  }
+
+  it('teaches an unknown field', () => {
+    const f = preferred();
+    expect(mapOne(f)?.status).toBe('unknown');
+    expect(mapFields([f], matcher, savedFor(f, 'city')).mappings[0]).toMatchObject({
+      status: 'taught',
+      source: 'taught',
+      profileField: 'city',
+      confidence: { reasons: ['user-mapping'] },
+    });
+  });
+
+  it('wins over a deterministic match (re-mapping)', () => {
+    const f = field('tel', { label: 'Phone', name: 'phone' });
+    expect(mapOne(f)).toMatchObject({ status: 'mapped', profileField: 'phone' });
+    const taught = mapFields([f], matcher, savedFor(f, 'phone'));
+    expect(taught.mappings[0]).toMatchObject({ status: 'taught', profileField: 'phone' });
+  });
+
+  it('does not apply to fields that only share a weak signal', () => {
+    const saved = savedFor(preferred(), 'city');
+    const other = field('text', { label: 'Current location', name: 'q17' });
+    expect(mapFields([other], matcher, saved).mappings[0]?.source).toBe('automatic');
+  });
+
+  it('ignores a saved mapping the field cannot hold and falls back to the matcher', () => {
+    const f = field('email', { label: 'Email', name: 'email' });
+    const key = createMappingKey(f) ?? '';
+    const incompatible = new Map([
+      [
+        key,
+        {
+          key,
+          parts: { fieldType: 'email' as const, question: 'email' },
+          profileField: 'willing_to_relocate' as const,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    ]);
+    expect(mapFields([f], matcher, incompatible).mappings[0]).toMatchObject({
+      status: 'mapped',
+      source: 'automatic',
+      profileField: 'email',
+    });
+  });
+
+  it('keeps unknown fields unknown when no saved mapping exists', () => {
+    const f = preferred();
+    expect(mapFields([f], matcher, new Map()).mappings[0]?.status).toBe('unknown');
+  });
+
+  it('still reports hidden fields as unsupported, with the taught source', () => {
+    const f = { ...preferred(), visible: false };
+    expect(mapFields([f], matcher, savedFor(f, 'city')).mappings[0]).toMatchObject({
+      status: 'unsupported',
+      unsupportedReason: 'hidden',
+      source: 'taught',
+    });
   });
 });

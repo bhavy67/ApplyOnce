@@ -1,9 +1,12 @@
 import type { LocalStore } from '@applyonce/core';
 import { createEmptyProfile, PROFILE_SCHEMA_VERSION, type Profile } from '@applyonce/profile';
+import type { SavedMappingsRecord } from './saved-mapping-repository';
 
 /** Everything the extension persists locally, by storage key. */
 export interface ExtensionStorageSchema {
   profile: Profile;
+  /** Teach Once mappings. Independent of the profile: clearing one never touches the other. */
+  savedMappings: SavedMappingsRecord;
 }
 
 export interface ProfileRepository {

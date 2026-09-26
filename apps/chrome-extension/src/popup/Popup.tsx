@@ -1,4 +1,4 @@
-import type { FillResult } from '@applyonce/core';
+import type { FillResult, FormField } from '@applyonce/core';
 import { useState } from 'react';
 import type { PageScan, ProfileStatus, ReviewedMapping } from '../messaging/protocol';
 import {
@@ -6,12 +6,14 @@ import {
   FAILURE_MESSAGES,
   fillApprovedFields,
   summarizeFields,
+  teachMapping,
 } from './analyze-page';
 import { initialSelection, plural, summarizeFillResults, summarizeReview } from './review';
 import { ReviewList } from './ReviewList';
 
 interface Analysis {
   tabId: number;
+  site?: string;
   scan: PageScan;
   mappings: ReviewedMapping[];
 }
@@ -73,20 +75,32 @@ export function Popup() {
       {state.status === 'ready' && <AnalysisReview key={analysisCount} analysis={state.analysis} />}
 
       <p className="note">ApplyOnce never submits forms. Check the page before you submit.</p>
-      <button
-        type="button"
-        className="secondary"
-        onClick={() => void chrome.runtime.openOptionsPage()}
-      >
-        Manage Profile
-      </button>
+      <div className="footer-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => void chrome.runtime.openOptionsPage()}
+        >
+          Manage Profile
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() =>
+            void chrome.tabs.create({ url: chrome.runtime.getURL('profile.html#saved-mappings') })
+          }
+        >
+          Saved mappings
+        </button>
+      </div>
     </main>
   );
 }
 
 function AnalysisReview({ analysis }: { analysis: Analysis }) {
-  const { tabId, scan, mappings } = analysis;
-  const [selected, setSelected] = useState(() => initialSelection(mappings));
+  const { tabId, site, scan } = analysis;
+  const [mappings, setMappings] = useState(analysis.mappings);
+  const [selected, setSelected] = useState(() => initialSelection(analysis.mappings));
   const [filling, setFilling] = useState(false);
   const [results, setResults] = useState<FillResult[]>();
   const [fillError, setFillError] = useState<string>();
@@ -104,6 +118,17 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
       else next.delete(fieldId);
       return next;
     });
+  }
+
+  /** Saves the taught mapping and updates this field's review. Never fills. */
+  async function teach(field: FormField, profileField: string): Promise<string | undefined> {
+    const updated = await teachMapping(field, profileField, site).catch(() => undefined);
+    if (!updated) return 'Could not save this mapping.';
+    setMappings((current) => current.map((m) => (m.fieldId === field.id ? updated : m)));
+    // A changed mapping must be approved again before it can be filled.
+    toggle(field.id, false);
+    setResults((current) => current?.filter((r) => r.fieldId !== field.id));
+    return undefined;
   }
 
   async function fill() {
@@ -178,6 +203,7 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
           results={resultsById}
           disabled={filling}
           onToggle={toggle}
+          onTeach={teach}
         />
       )}
     </section>

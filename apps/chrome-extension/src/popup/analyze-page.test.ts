@@ -7,6 +7,7 @@ import {
   fillApprovedFields,
   isAnalyzableUrl,
   summarizeFields,
+  teachMapping,
 } from './analyze-page';
 
 function field(overrides: Partial<FormField> & Pick<FormField, 'signals'>): FormField {
@@ -72,6 +73,7 @@ describe('analyzeActiveTab', () => {
     {
       fieldId: 'f',
       status: 'mapped',
+      source: 'automatic',
       profileField: 'email',
       confidence: { score: 90, level: 'high', reasons: ['label', 'field-type'] },
       hasValue: true,
@@ -125,7 +127,13 @@ describe('analyzeActiveTab', () => {
   it('injects the content script, scans once, then asks the service worker to map', async () => {
     const { executeScript, sendMessage, runtimeSendMessage } = stubChrome();
 
-    expect(await analyzeActiveTab()).toEqual({ ok: true, tabId: 7, scan, mappings });
+    expect(await analyzeActiveTab()).toEqual({
+      ok: true,
+      tabId: 7,
+      site: 'jobs.example.com',
+      scan,
+      mappings,
+    });
     expect(runtimeSendMessage).toHaveBeenCalledExactlyOnceWith({
       type: MessageType.MapFields,
       payload: { fields: scan.fields },
@@ -220,5 +228,33 @@ describe('analysis mapping and filling', () => {
       runtime: { sendMessage: () => Promise.reject(new Error('no service worker')) },
     });
     expect(await fillApprovedFields(3, [])).toBeUndefined();
+  });
+});
+
+describe('teachMapping', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('asks the service worker to save the mapping and returns the updated review', async () => {
+    const updated = { fieldId: 'f', status: 'taught', source: 'taught', profileField: 'city' };
+    const sendMessage = vi.fn<(message: unknown) => Promise<unknown>>(() =>
+      Promise.resolve(ok({ mapping: updated })),
+    );
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    const f = field({ id: 'f', signals: { label: 'Preferred Working Location' } });
+
+    expect(await teachMapping(f, 'city', 'jobs.example.com')).toEqual(updated);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith({
+      type: MessageType.SaveMapping,
+      payload: { field: f, profileField: 'city', site: 'jobs.example.com' },
+    });
+  });
+
+  it('returns undefined when the mapping is rejected', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: { sendMessage: () => Promise.resolve({ ok: false, error: 'invalid-mapping' }) },
+    });
+    expect(await teachMapping(field({ signals: {} }), 'nope', undefined)).toBeUndefined();
   });
 });

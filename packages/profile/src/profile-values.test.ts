@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createEmptyProfile,
   getProfileValue,
+  isProfileFieldKey,
   PROFILE_FIELD_PATHS,
   readProfilePath,
   type Profile,
@@ -67,5 +68,33 @@ describe('readProfilePath', () => {
     ['schemaVersion', 1],
   ])('%s → %j', (path, expected) => {
     expect(readProfilePath(profile, path)).toBe(expected);
+  });
+});
+
+describe('isProfileFieldKey', () => {
+  it.each(['email', 'first_name', 'city', 'postal_code', 'willing_to_relocate'])(
+    'accepts canonical profile field %j',
+    (key) => {
+      expect(isProfileFieldKey(key)).toBe(true);
+    },
+  );
+
+  it('accepts keys that resolve to nested profile paths', () => {
+    expect(isProfileFieldKey('city')).toBe(true);
+    expect(PROFILE_FIELD_PATHS.city).toBe('location.city');
+  });
+
+  it.each([
+    'location.city',
+    'identity.firstName',
+    'firstName',
+    '__proto__',
+    'toString',
+    'education.0.institution',
+    '',
+    42,
+    null,
+  ])('rejects arbitrary or invalid target %j', (key) => {
+    expect(isProfileFieldKey(key)).toBe(false);
   });
 });

@@ -208,3 +208,38 @@ dialog h2 {
   gap: 8px;
   margin-top: 16px;
 }
+
+.saved-mappings .muted {
+  margin: 0 0 12px;
+}
+
+.mapping-list {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.mapping-list li {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.mapping-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mapping-field {
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.small {
+  font-size: 12px;
+}

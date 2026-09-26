@@ -18,7 +18,14 @@ export type AnalysisFailure =
   | 'profile-unavailable';
 
 export type AnalysisResult =
-  | { ok: true; tabId: number; scan: PageScan; mappings: ReviewedMapping[] }
+  | {
+      ok: true;
+      tabId: number;
+      /** Hostname of the page, recorded with taught mappings for display. */
+      site?: string;
+      scan: PageScan;
+      mappings: ReviewedMapping[];
+    }
   | { ok: false; reason: AnalysisFailure };
 
 export const FAILURE_MESSAGES: Readonly<Record<AnalysisFailure, string>> = {
@@ -75,7 +82,14 @@ export async function analyzeActiveTab(): Promise<AnalysisResult> {
 
   const mapped = await sendToServiceWorker(MessageType.MapFields, { fields: scan.fields });
   if (!mapped.ok) return failure('profile-unavailable');
-  return { ok: true, tabId: tab.id, scan, mappings: mapped.data.mappings };
+  const site = siteOf(tab.url);
+  return {
+    ok: true,
+    tabId: tab.id,
+    ...(site ? { site } : {}),
+    scan,
+    mappings: mapped.data.mappings,
+  };
 }
 
 /**
@@ -88,6 +102,31 @@ export async function fillApprovedFields(
 ): Promise<FillResult[] | undefined> {
   const response = await sendToServiceWorker(MessageType.FillPage, { tabId, approvals });
   return response.ok && isFillResultList(response.data.results) ? response.data.results : undefined;
+}
+
+/**
+ * Teach Once: saves the user's chosen profile field for this field and returns its updated
+ * mapping for review. Never fills anything.
+ */
+export async function teachMapping(
+  field: FormField,
+  profileField: string,
+  site: string | undefined,
+): Promise<ReviewedMapping | undefined> {
+  const response = await sendToServiceWorker(MessageType.SaveMapping, {
+    field,
+    profileField,
+    ...(site ? { site } : {}),
+  });
+  return response.ok ? response.data.mapping : undefined;
+}
+
+function siteOf(url: string | undefined): string | undefined {
+  try {
+    return url ? new URL(url).hostname || undefined : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function failure(reason: AnalysisFailure): AnalysisResult {

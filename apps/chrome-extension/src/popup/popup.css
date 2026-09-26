@@ -111,18 +111,6 @@ body {
   list-style: none;
 }
 
-.review-item label {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  padding: 6px 0;
-  border-top: 1px solid #eaeef2;
-}
-
-.review-item input {
-  margin-top: 3px;
-}
-
 .review-body {
   display: flex;
   flex-direction: column;
@@ -168,4 +156,70 @@ body {
   margin: 12px 0 8px;
   color: #59636e;
   font-size: 12px;
+}
+
+.review-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding-top: 6px;
+  border-top: 1px solid #eaeef2;
+}
+
+.review-row input {
+  margin-top: 3px;
+}
+
+.review-item {
+  padding-bottom: 6px;
+}
+
+.source-taught .mapping {
+  color: #8250df;
+}
+
+.popup button.link.teach {
+  margin: 2px 0 0 22px;
+  font-size: 12px;
+}
+
+.teach-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 0 22px;
+  padding: 8px;
+  border: 1px solid #d1d9e0;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.teach-editor select {
+  padding: 4px;
+  font: inherit;
+}
+
+.teach-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.popup button.small {
+  width: auto;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-color: #0969da;
+  background: #0969da;
+  color: #fff;
+}
+
+.popup button.small.secondary {
+  border-color: #d1d9e0;
+  background: #fff;
+  color: #1f2328;
+}
+
+.footer-actions {
+  display: flex;
+  gap: 8px;
 }

@@ -1,12 +1,23 @@
 import { useEffect, useId, useRef } from 'react';
 
-interface ClearProfileDialogProps {
+interface ConfirmDialogProps {
   open: boolean;
+  title: string;
+  body: string;
+  confirmLabel: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-export function ClearProfileDialog({ open, onCancel, onConfirm }: ClearProfileDialogProps) {
+/** Modal confirmation for destructive actions. Cancel has focus by default. */
+export function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel,
+  onCancel,
+  onConfirm,
+}: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
 
@@ -20,14 +31,14 @@ export function ClearProfileDialog({ open, onCancel, onConfirm }: ClearProfileDi
   return (
     // `onClose` also covers the Escape key.
     <dialog ref={dialogRef} aria-labelledby={titleId} onClose={onCancel}>
-      <h2 id={titleId}>Clear your saved profile?</h2>
-      <p>This permanently removes your profile from this browser.</p>
+      <h2 id={titleId}>{title}</h2>
+      <p>{body}</p>
       <div className="dialog-actions">
         <button type="button" className="secondary" onClick={onCancel} autoFocus>
           Cancel
         </button>
         <button type="button" className="danger" onClick={onConfirm}>
-          Clear Profile
+          {confirmLabel}
         </button>
       </div>
     </dialog>

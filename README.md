@@ -9,16 +9,18 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 3 — Deterministic field mapping and safe autofill: complete.**
+**Phase 4 — Teach Once and saved field mappings: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
 - Phase 2: **Analyze this page** scans the current tab once and lists its form fields.
 - Phase 3: each detected field is mapped to a profile field with an explainable
   confidence. You review the mappings, and **Fill** writes only the fields you approved.
-  Nothing is ever submitted.
+- Phase 4: you can **Teach** ApplyOnce which profile field an unknown field is, or
+  **Change** any mapping. Taught mappings are saved locally and reused on later pages,
+  and you can delete them. Teaching never fills anything.
 
-Generic HTML forms only; Workday and Greenhouse get dedicated support in later phases.
+Nothing is ever submitted. Generic HTML forms only; Workday and Greenhouse get dedicated support in later phases.
 
 ## Repository structure
 
@@ -115,7 +117,7 @@ history are in the model but have no UI yet, and are preserved when saving.
 ### Where the data is stored
 
 In IndexedDB, in the extension's own origin (database `applyonce`, object store `records`,
-key `profile`). Data stays in this Chrome profile on this device and is deleted if the
+key `profile`; saved field mappings under the key `savedMappings`). Data stays in this Chrome profile on this device and is deleted if the
 extension is uninstalled. Nothing is sent anywhere; there is no backend.
 
 Storage code lives only in the extension (`apps/chrome-extension/src/storage`), behind the
@@ -137,9 +139,11 @@ Application → IndexedDB → `applyonce`.
    page.
 3. Review the list. High-confidence matches with a profile value start selected; tick
    review-level matches you agree with, untick anything you don't want filled.
-4. Click **Fill N selected fields**. Each field then shows Filled, Skipped, Failed, or Not
+4. Optional: use **Teach** (unknown and review fields) or **Change** (any matched field) to
+   pick the right profile field yourself. See [Teach Once](#teach-once).
+5. Click **Fill N selected fields**. Each field then shows Filled, Skipped, Failed, or Not
    found, and a summary line such as "8 fields filled · 1 failed · 1 need review".
-5. Check the page and submit it yourself. ApplyOnce never submits.
+6. Check the page and submit it yourself. ApplyOnce never submits.
 
 ### What happens
 
@@ -204,6 +208,48 @@ never filled. If a second profile field also scores ≥ 50, the result is capped
 (a _conflict_). A match the field cannot hold (e.g. an email into a checkbox) or a hidden or
 disabled field is _unsupported_. The weights are provisional, to be tuned on real forms.
 
+### Teach Once
+
+When ApplyOnce can't map a field, or maps it wrongly, click **Teach** or **Change** under
+it, choose a profile field, and **Save mapping**.
+
+- The selector lists only profile fields this kind of field can hold, built from the
+  canonical profile field definitions (`PROFILE_FIELDS` in `packages/core`). There is no
+  free-text value entry.
+- The field then shows **Taught by you** (instead of _Automatic_). It is not selected:
+  tick it and click Fill as usual. Teaching or changing a mapping never fills anything, and
+  a changed mapping always has to be approved again.
+- The mapping is saved and reused on later analyses, on any site where the same question
+  appears. It is shown as taught there too, and is never pre-selected.
+- **Saved mappings** (popup footer, or the bottom of the profile page) lists every taught
+  mapping: the field's question, its type, the profile field, the site where it was taught,
+  and when. **Delete** removes one; **Delete all mappings…** asks for confirmation first.
+  After deleting, re-analyze and automatic mapping applies again. Deleting mappings never
+  changes your profile, and clearing your profile never deletes mappings.
+
+**How a field is recognized (mapping key).** A saved mapping is keyed on the field type
+plus the field's whole normalized question: its label, else aria-label, else placeholder,
+else nearby text. When the question comes from the field's own label, a surrounding
+fieldset legend is included as context. `name`/`id` are used only when the field has no
+text at all. Fields with none of these cannot be taught.
+
+This is safe because matching is exact equality of the whole normalized question, never
+containment or similarity: "Preferred working location" and "Current location" have
+different keys, and "Phone" under "Emergency contact" differs from "Phone" under "Your
+details". Formatting differences such as case, punctuation, or a trailing `*` don't matter.
+The URL is not part of the key, so a mapping taught on one site applies to the same
+question elsewhere.
+
+**Precedence** for each field:
+
+1. A saved mapping with the same key whose profile field this field can hold → _taught_.
+   A saved mapping that no longer fits the field is ignored.
+2. The deterministic matcher → _mapped_ (high confidence) or _review_.
+3. Otherwise → _unknown_.
+
+At fill time the service worker repeats this check, so an approval for a mapping that has
+since been deleted or changed is refused.
+
 ### Filling
 
 - Text-like fields: the value is written with the element's native setter, then `input` and
@@ -243,6 +289,10 @@ single classic script, because MV3 content scripts cannot be ES modules.
   values (only whether a value exists). Mapping and fill requests are refused from content
   scripts. Nothing else is written into the page's DOM, globals, storage, or URL.
 - The scanner collects field metadata only, never page values.
+- Saved mappings contain only the mapping key parts (field type and normalized question,
+  context, or name), the profile field key, the hostname where it was taught, and
+  timestamps. Never form values, profile values, passwords, or page content. Only extension
+  pages can list, save, or delete them; content scripts are refused.
 - No secrets or API keys in the repository. `.env*` files are git-ignored.
 
 ## Intentionally not implemented yet
@@ -251,7 +301,8 @@ single classic script, because MV3 content scripts cannot be ES modules.
   the generic adapter is used everywhere)
 - Education, work history, work mode, and employment type as fill targets (no profile field
   keys yet)
-- Teach Once / saved mappings, manual re-mapping of a field to another profile field
+- Scoping saved mappings to a site, similarity-based matching of saved mappings, and
+  mapping edits from the management view (delete and re-teach instead)
 - Continuous DOM observation (MutationObserver), iframes, shadow DOM, custom widgets,
   date pickers, file uploads
 - Profile completeness checks

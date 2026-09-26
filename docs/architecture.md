@@ -79,8 +79,8 @@ apps/chrome-extension/src/profile-page   React UI; talks only to ProfileReposito
   result, never an exception. `src/messaging/send.ts` wraps `chrome.runtime.sendMessage`
   and `chrome.tabs.sendMessage`, turning "no receiver" and malformed responses into error
   results.
-- **Profile exposure.** `GetProfile`, `MapFields`, and `FillPage` are accepted only when
-  the sender's URL is an extension page. Content scripts share a renderer process with the
+- **Profile exposure.** `GetProfile`, `MapFields`, `FillPage`, and the saved-mapping
+  messages are accepted only when the sender's URL is an extension page. Content scripts share a renderer process with the
   web page, so they get `GetProfileStatus` (`{ hasData, valueCount }`) and, on Fill, a
   `FillFields` message with only the approved field/value pairs. `MapFields` returns
   `hasValue` flags, not values, so the popup never holds profile values either.
@@ -127,13 +127,52 @@ and replaced or removed ones are reported as not found. See the README for per-t
 Scanner tests use HTML fixtures in `happy-dom` (dev dependency of `adapters/generic` only,
 enabled per test file).
 
+## Teach Once (saved mappings)
+
+```text
+popup Teach/Change ── SaveMapping { field, profileField, site } ──► service worker
+                                                                   createMappingKeyParts(field)
+                                                                   SavedMappingRepository.save
+                                                                     (validates profile field key
+                                                                      and field-type compatibility)
+                      ◄── the field's updated ReviewedMapping (status "taught", no values)
+profile page ── ListMappings / DeleteMapping / ClearMappings ──► service worker
+```
+
+- **Key** (`field-mapper/mapping-key.ts`): `v1|<fieldType>|q=<question>|c=<context>|i=<identifier>`.
+  The question is the field's normalized label, else aria-label, else placeholder, else
+  nearby text. Context is the fieldset legend when the question is the field's own label.
+  The identifier (name, else id) is used only when there is no question. Exact equality
+  only; no URL. The version prefix lets the format change later without misreading old
+  keys (they simply stop matching).
+- **Precedence** (`mapFields(fields, matcher, savedMappings)`): a saved mapping whose key
+  matches and whose profile field the field type can hold → `taught` (`source: 'taught'`);
+  otherwise the deterministic matcher (`source: 'automatic'`); otherwise `unknown`. Hidden,
+  disabled, or incompatible fields are `unsupported` whatever the source.
+- **Storage** (`storage/saved-mapping-repository.ts`): one `savedMappings` record
+  (`{ version: 1, mappings }`) in the extension's IndexedDB, behind `LocalStore`. The
+  repository is browser-independent code. It validates the profile field
+  (`isProfileFieldKey`, no arbitrary paths) and field-type compatibility before writing,
+  copies only known key-part fields, upserts by key (keeping `createdAt`), and serializes
+  writes. An unknown stored version is refused, not discarded. The service worker is the
+  only writer; if mappings can't be read, mapping falls back to automatic only.
+- **Separation**: profile and saved mappings are separate records; clearing one never
+  touches the other.
+- **Access**: `SaveMapping`, `ListMappings`, `DeleteMapping`, `ClearMappings` are accepted
+  only from extension pages. Content scripts can send `GetProfileStatus` and nothing else to
+  the service worker.
+- **Filling**: unchanged safety model. `FillPage` re-runs the precedence check with the
+  current saved mappings, so only fields currently mapped/review/taught to the approved
+  profile field are filled, and only their values are sent to the content script.
+
 ## Mapping pipeline
 
 ```text
 adapter.getFields(page)   →  FormField[]              (content script, DOM-aware)
 createFieldSignature      →  FieldSignature            (field-mapper, normalized text)
 FieldMatcher.match        →  FieldMatch + confidence   (alias matcher, reasons per point)
-mapFields                 →  one FieldMapping per field: mapped / review / unknown / unsupported
+saved mappings (by key)   →  taught, when a compatible saved mapping exists
+mapFields                 →  one FieldMapping per field: mapped / review / taught / unknown / unsupported
 getProfileValue           →  hasValue for review; the value itself only for approved fields
 user review → FillPage → adapter.fillFields → FillResult per field → user submits
 ```

@@ -62,3 +62,13 @@ export function isFillInstruction(value: unknown): value is FillInstruction {
     ['name', 'htmlId', 'label'].every((key) => isOptionalString(expected[key]))
   );
 }
+
+/** A bare hostname (no scheme, port, or path), e.g. "jobs.example.com". */
+export function isHostname(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9.-]{1,253}$/i.test(value);
+}
+
+/** Saved mapping keys are short, versioned strings built by field-mapper. */
+export function isMappingKey(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('v1|') && value.length <= 2000;
+}
