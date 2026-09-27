@@ -13,17 +13,27 @@ import type { EMPLOYMENT_TYPE_CHOICES, WORK_MODE_CHOICES } from '@applyonce/core
  *
  * - 1: initial profile (Phase 1).
  * - 2: single primary education record, single work mode and employment type, website.
+ * - 3: repeatable records: education list (the first entry is the primary record), work
+ *   experience list (moved from `experience.workHistory`), certifications list.
  */
-export const PROFILE_SCHEMA_VERSION = 2;
+export const PROFILE_SCHEMA_VERSION = 3;
 
 export interface Profile {
   schemaVersion: typeof PROFILE_SCHEMA_VERSION;
   identity: Identity;
   contact: Contact;
   location: Location;
-  /** The primary (highest) education record. Multiple records are not supported yet. */
-  education: Education;
+  /**
+   * Education records, most relevant first. The first entry is the primary (highest)
+   * record: the institution, field_of_study, highest_degree, and graduation_year fields read
+   * and write it.
+   */
+  education: EducationEntry[];
+  /** Current employment, as single values. Independent of `workExperience`. */
   experience: Experience;
+  /** Employment history, in the order the user keeps it. Never derived from `experience`. */
+  workExperience: WorkExperienceEntry[];
+  certifications: CertificationEntry[];
   links: Links;
   preferences: Preferences;
   authorization: Authorization;
@@ -58,12 +68,16 @@ export interface Location {
   postalCode?: string;
 }
 
-export interface Education {
+export interface EducationEntry {
   institution?: string;
   degree?: string;
   fieldOfStudy?: string;
+  startYear?: number;
   graduationYear?: number;
 }
+
+/** Earlier name of an education entry (kept for `legacy`). */
+export type Education = EducationEntry;
 
 export interface Experience {
   currentCompany?: string;
@@ -71,17 +85,25 @@ export interface Experience {
   totalExperienceYears?: number;
   /** Free text as users answer it on forms, e.g. "30 days" or "Immediately". */
   noticePeriod?: string;
-  workHistory: WorkHistoryEntry[];
 }
 
-export interface WorkHistoryEntry {
+export interface WorkExperienceEntry {
   company?: string;
   title?: string;
-  /** ISO 8601 date (YYYY-MM or YYYY-MM-DD). */
+  location?: string;
+  /** "YYYY-MM" (or "YYYY-MM-DD"), kept as text. */
   startDate?: string;
-  /** ISO 8601 date. Omitted for the current role. */
+  /** "YYYY-MM" (or "YYYY-MM-DD"). Left blank for a current role. */
   endDate?: string;
+  current?: boolean;
   description?: string;
+}
+
+export interface CertificationEntry {
+  name?: string;
+  issuer?: string;
+  issueYear?: number;
+  credentialUrl?: string;
 }
 
 export interface Links {
@@ -136,7 +158,10 @@ export interface CustomAnswer {
 
 /** Values from older versions that did not fit the current model, preserved verbatim. */
 export interface LegacyProfileData {
-  /** Education entries after the first (version 1 allowed a list). */
+  /**
+   * Education entries after the first (version 1 allowed a list). Since version 3 these are
+   * education records again; they stay here only if there was no primary record to follow.
+   */
   education?: Education[];
   /** Work modes after the first (version 1 allowed several). */
   workModes?: string[];

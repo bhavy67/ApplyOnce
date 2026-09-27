@@ -3,12 +3,20 @@ export { normalizeChoice } from './choices';
 export { countProfileValues } from './count-profile-values';
 export { createEmptyProfile } from './create-empty-profile';
 export { migrateProfile } from './migrate-profile';
+/** Kept here for callers from before the definitions moved to core. */
+export { isProfileFieldKey } from '@applyonce/core';
 export {
+  addRecord,
+  canAddRecord,
   getProfileValue,
-  isProfileFieldKey,
+  isBlankRecord,
+  moveRecord,
   readProfilePath,
   readStoredValue,
+  recordCount,
+  removeRecord,
   updateProfileValue,
+  updateRecordValue,
   type StoredProfileValue,
 } from './profile-values';
 export { sanitizeProfile } from './sanitize-profile';

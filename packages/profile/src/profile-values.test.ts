@@ -1,12 +1,27 @@
-import { PROFILE_FIELD_KEYS, PROFILE_FIELDS, type ProfileFieldKey } from '@applyonce/core';
+import {
+  MAX_PROFILE_RECORDS,
+  PROFILE_FIELD_KEYS,
+  PROFILE_FIELDS,
+  PROFILE_RECORD_FIELDS,
+  type ProfileFieldKey,
+  type ProfileTarget,
+} from '@applyonce/core';
 import { describe, expect, it } from 'vitest';
 import {
   createEmptyProfile,
   getProfileValue,
   isProfileFieldKey,
   readProfilePath,
+  addRecord,
+  canAddRecord,
+  isBlankRecord,
+  moveRecord,
   readStoredValue,
+  recordCount,
+  removeRecord,
+  sanitizeProfile,
   updateProfileValue,
+  updateRecordValue,
   type Profile,
   type StoredProfileValue,
 } from './index';
@@ -21,15 +36,23 @@ const profile: Profile = {
     currentTitle: 'Software Engineer',
     currentCompany: 'Example Co',
     totalExperienceYears: 4.5,
-    workHistory: [],
   },
   preferences: { workMode: 'hybrid', employmentType: 'full-time', openToRelocation: true },
-  education: {
-    degree: 'BSc',
-    fieldOfStudy: 'Physics',
-    institution: 'Example University',
-    graduationYear: 2019,
-  },
+  education: [
+    {
+      degree: 'BSc',
+      fieldOfStudy: 'Physics',
+      institution: 'Example University',
+      graduationYear: 2019,
+    },
+    { institution: 'Sample College', degree: 'Diploma', startYear: 2012 },
+    { institution: '   ' },
+  ],
+  workExperience: [
+    { company: 'Example Co', title: 'Software Engineer', current: true, startDate: '2021-06' },
+    { company: 'Old Co', title: 'Intern', endDate: '2021-05' },
+  ],
+  certifications: [{ name: 'Example Certified', credentialUrl: 'https://cert.example.com/1' }],
   authorization: { requiresSponsorship: false },
 };
 
@@ -102,7 +125,10 @@ describe('canonical paths', () => {
     const updated = updateProfileValue(createEmptyProfile(), key, value);
     expect(readStoredValue(updated, key)).toBe(value);
     expect(getProfileValue(updated, key)).toBe(value);
-    expect(updateProfileValue(updated, key, undefined)).toEqual(createEmptyProfile());
+    // A primary education field leaves a blank education[0], which saving drops.
+    expect(sanitizeProfile(updateProfileValue(updated, key, undefined))).toEqual(
+      createEmptyProfile(),
+    );
   });
 
   it('keeps other values when updating one field', () => {
@@ -125,10 +151,14 @@ describe('readProfilePath', () => {
     ['nope.city', undefined],
     ['location', undefined],
     ['education', undefined],
-    ['experience.workHistory', undefined],
+    ['workExperience', undefined],
+    ['education[0]', undefined],
+    ['education[1].institution', 'Sample College'],
+    ['education[9].institution', undefined],
+    ['education.institution', undefined],
     ['identity.__proto__', undefined],
     ['identity.firstName.length', undefined],
-    ['schemaVersion', 2],
+    ['schemaVersion', 3],
   ])('%s → %j', (path, expected) => {
     expect(readProfilePath(profile, path)).toBe(expected);
   });
@@ -157,5 +187,152 @@ describe('isProfileFieldKey', () => {
   it('resolves keys to nested paths only through the definitions', () => {
     const key: ProfileFieldKey = 'city';
     expect(PROFILE_FIELDS[key].path).toBe('location.city');
+  });
+});
+
+describe('record values', () => {
+  it.each([
+    ['education[0].startYear', undefined],
+    ['education[1].institution', 'Sample College'],
+    ['education[1].degree', 'Diploma'],
+    ['education[1].startYear', 2012],
+    ['education[2].institution', undefined],
+    ['education[3].institution', undefined],
+    ['workExperience[0].company', 'Example Co'],
+    ['workExperience[0].current', true],
+    ['workExperience[1].company', 'Old Co'],
+    ['workExperience[1].endDate', '2021-05'],
+    ['workExperience[2].company', undefined],
+    ['certifications[0].name', 'Example Certified'],
+    ['certifications[0].issuer', undefined],
+    ['certifications[1].name', undefined],
+  ] as const)('%s → %j', (target, value) => {
+    expect(getProfileValue(profile, target)).toBe(value);
+  });
+
+  it('reads the primary education record through the long-standing keys', () => {
+    expect(getProfileValue(profile, 'institution')).toBe('Example University');
+    expect(getProfileValue(profile, 'education[0].institution')).toBe('Example University');
+    expect(getProfileValue({ ...profile, education: [] }, 'institution')).toBeUndefined();
+  });
+
+  it.each([
+    'education[1]',
+    'education.1.institution',
+    'education[1].gpa',
+    'education[1].institution.length',
+    `education[${MAX_PROFILE_RECORDS}].institution`,
+    'workExperience[0].__proto__',
+    'workExperience[0].constructor',
+    'legacy.education[0].institution',
+    'experience.workHistory[0].company',
+  ])('rejects the non-canonical path %j', (target) => {
+    expect(getProfileValue(profile, target)).toBeUndefined();
+  });
+
+  it('never reads from a record that is not a plain object', () => {
+    const odd = { ...profile, certifications: ['Example' as unknown as object] };
+    expect(getProfileValue(odd, 'certifications[0].name')).toBeUndefined();
+  });
+
+  it('writes and reads every record field of any record through its target', () => {
+    let edited = addRecord(addRecord(createEmptyProfile(), 'education'), 'education');
+    edited = addRecord(addRecord(edited, 'workExperience'), 'workExperience');
+    edited = addRecord(edited, 'certifications');
+    for (const { collection, field, kind } of PROFILE_RECORD_FIELDS) {
+      const index = collection === 'certifications' ? 0 : 1;
+      const value =
+        kind === 'year' ? 2020 : kind === 'boolean' ? true : kind === 'month' ? '2020-01' : 'x';
+      const target = `${collection}[${index}].${field}` as ProfileTarget;
+      edited = updateProfileValue(edited, target, value);
+      expect(readStoredValue(edited, target)).toBe(value);
+      expect(getProfileValue(edited, target)).toBe(value);
+    }
+    expect(edited.education[0]).toEqual({});
+  });
+});
+
+describe('record editing', () => {
+  const empty = createEmptyProfile();
+
+  it('adds, edits, and removes records', () => {
+    let edited = addRecord(empty, 'education');
+    expect(edited.education).toEqual([{}]);
+    edited = updateRecordValue(edited, 'education', 0, 'institution', 'University of Example');
+    edited = addRecord(edited, 'education');
+    edited = updateRecordValue(edited, 'education', 1, 'institution', 'Sample College');
+    edited = updateRecordValue(edited, 'education', 1, 'graduationYear', 2015);
+    expect(edited.education).toEqual([
+      { institution: 'University of Example' },
+      { institution: 'Sample College', graduationYear: 2015 },
+    ]);
+    edited = updateRecordValue(edited, 'education', 1, 'institution', 'Sample University');
+    edited = updateRecordValue(edited, 'education', 1, 'graduationYear', undefined);
+    expect(edited.education[1]).toEqual({ institution: 'Sample University' });
+    edited = removeRecord(edited, 'education', 0);
+    expect(edited.education).toEqual([{ institution: 'Sample University' }]);
+    expect(getProfileValue(edited, 'institution')).toBe('Sample University');
+    expect(empty.education).toEqual([]);
+  });
+
+  it('handles work experience with the current flag, and certifications', () => {
+    let edited = addRecord(addRecord(empty, 'workExperience'), 'workExperience');
+    edited = updateRecordValue(edited, 'workExperience', 0, 'company', 'Example Co');
+    edited = updateRecordValue(edited, 'workExperience', 0, 'current', true);
+    edited = updateRecordValue(edited, 'workExperience', 1, 'company', 'Old Co');
+    edited = addRecord(edited, 'certifications');
+    edited = updateRecordValue(edited, 'certifications', 0, 'name', 'Example Certified');
+    expect(edited.workExperience).toEqual([
+      { company: 'Example Co', current: true },
+      { company: 'Old Co' },
+    ]);
+    edited = removeRecord(edited, 'certifications', 0);
+    expect(edited.certifications).toEqual([]);
+  });
+
+  it('reorders records with up/down moves and ignores moves past either end', () => {
+    const three = {
+      ...empty,
+      workExperience: [{ company: 'A' }, { company: 'B' }, { company: 'C' }],
+    };
+    expect(moveRecord(three, 'workExperience', 2, -1).workExperience).toEqual([
+      { company: 'A' },
+      { company: 'C' },
+      { company: 'B' },
+    ]);
+    expect(moveRecord(three, 'workExperience', 0, 1).workExperience.map((r) => r.company)).toEqual([
+      'B',
+      'A',
+      'C',
+    ]);
+    expect(moveRecord(three, 'workExperience', 0, -1)).toBe(three);
+    expect(moveRecord(three, 'workExperience', 2, 1)).toBe(three);
+  });
+
+  it('writing a primary education field creates education[0] when there is none', () => {
+    const edited = updateProfileValue(empty, 'institution', 'University of Example');
+    expect(edited.education).toEqual([{ institution: 'University of Example' }]);
+    expect(updateProfileValue(empty, 'institution', undefined)).toBe(empty);
+  });
+
+  it('refuses unknown record fields and indexes beyond the end', () => {
+    expect(() => updateRecordValue(empty, 'education', 0, 'gpa', '4.0')).toThrow();
+    expect(() => updateRecordValue(empty, 'education', 1, 'institution', 'X')).toThrow();
+    expect(() => updateProfileValue(empty, 'education[1].gpa' as ProfileTarget, 'x')).toThrow();
+    expect(removeRecord(empty, 'education', 0)).toBe(empty);
+  });
+
+  it(`stops adding at ${MAX_PROFILE_RECORDS} records`, () => {
+    let edited = empty;
+    for (let i = 0; i < MAX_PROFILE_RECORDS + 3; i++) edited = addRecord(edited, 'certifications');
+    expect(recordCount(edited, 'certifications')).toBe(MAX_PROFILE_RECORDS);
+    expect(canAddRecord(edited, 'certifications')).toBe(false);
+  });
+
+  it('knows a blank record', () => {
+    expect(isBlankRecord({})).toBe(true);
+    expect(isBlankRecord({ institution: '  ' })).toBe(true);
+    expect(isBlankRecord({ current: true })).toBe(false);
+    expect(isBlankRecord({ startYear: 2020 })).toBe(false);
   });
 });

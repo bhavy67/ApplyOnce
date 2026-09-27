@@ -589,15 +589,16 @@ describe('Phase 5 fields through the service worker', () => {
       currentTitle: 'Staff Engineer',
       currentCompany: 'Example Co',
       totalExperienceYears: 7,
-      workHistory: [],
     },
     preferences: { workMode: 'hybrid', employmentType: 'full-time', openToRelocation: true },
-    education: {
-      degree: 'MSc',
-      fieldOfStudy: 'Physics',
-      institution: 'Example University',
-      graduationYear: 2019,
-    },
+    education: [
+      {
+        degree: 'MSc',
+        fieldOfStudy: 'Physics',
+        institution: 'Example University',
+        graduationYear: 2019,
+      },
+    ],
   };
   const NEW_VALUES = [
     'github.com/jane-doe-example',
@@ -707,6 +708,200 @@ describe('GetRuntimeInfo', () => {
   it('is refused for content scripts', async () => {
     const { handle } = await setup(sampleProfile);
     expect(await handle({ type: MessageType.GetRuntimeInfo }, WEB_PAGE)).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+  });
+});
+
+describe('Phase 10: repeatable records through the service worker', () => {
+  const recordsProfile: Profile = {
+    ...sampleProfile,
+    experience: { currentCompany: 'Current Co', currentTitle: 'Staff Engineer' },
+    education: [
+      { institution: 'University of Example', fieldOfStudy: 'Physics', graduationYear: 2021 },
+      { institution: 'Sample College', graduationYear: 2016 },
+    ],
+    workExperience: [
+      { company: 'Current Co', title: 'Staff Engineer', current: true },
+      { company: 'Previous Employer Ltd', title: 'Engineer', endDate: '2020-12' },
+    ],
+    certifications: [
+      { name: 'Example Certified', credentialUrl: 'https://cert.example.com/secret-id' },
+    ],
+  };
+  const RECORD_VALUES = [
+    'University of Example',
+    'Sample College',
+    'Previous Employer Ltd',
+    'Example Certified',
+    'cert.example.com',
+  ];
+  const previousUniversity = field('id:pu', 'text', {
+    htmlId: 'pu',
+    label: 'Previous university',
+  });
+  const previousEmployer = field('id:pe', 'text', { htmlId: 'pe', label: 'Previous employer' });
+  const university = field('id:u', 'text', { htmlId: 'u', label: 'University' });
+
+  async function teach(
+    handle: Awaited<ReturnType<typeof setup>>['handle'],
+    f: FormField,
+    target: string,
+  ) {
+    return handle(
+      { type: MessageType.SaveMapping, payload: { field: f, profileField: target } },
+      EXTENSION_PAGE,
+    );
+  }
+  async function fillOne(
+    handle: Awaited<ReturnType<typeof setup>>['handle'],
+    f: FormField,
+    profileField: string,
+  ) {
+    return handle(
+      {
+        type: MessageType.FillPage,
+        payload: { tabId: 3, approvals: [{ field: f, profileField }] },
+      },
+      EXTENSION_PAGE,
+    );
+  }
+
+  it('reports record counts (never values) with the mappings, only to extension pages', async () => {
+    const { handle } = await setup(recordsProfile);
+    const mapped = await handle(
+      { type: MessageType.MapFields, payload: { fields: [university] } },
+      EXTENSION_PAGE,
+    );
+    expect(mapped).toMatchObject({
+      ok: true,
+      data: {
+        mappings: [{ status: 'mapped', profileField: 'institution', hasValue: true }],
+        records: { education: 2, workExperience: 2, certifications: 1 },
+      },
+    });
+    for (const value of RECORD_VALUES) expect(JSON.stringify(mapped)).not.toContain(value);
+    expect(
+      await handle({ type: MessageType.MapFields, payload: { fields: [university] } }, WEB_PAGE),
+    ).toEqual({ ok: false, error: 'forbidden' });
+  });
+
+  it('automatic mapping fills the primary education record only', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(recordsProfile, fillInTab);
+    await fillOne(handle, university, 'institution');
+    expect(calls.map((c) => c.instructions.map((i) => i.value))).toEqual([
+      ['University of Example'],
+    ]);
+  });
+
+  it('teaches "Previous university" → Education 2 → Institution; fills only after approval', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(recordsProfile, fillInTab);
+    expect(await teach(handle, previousUniversity, 'education[1].institution')).toMatchObject({
+      ok: true,
+      data: {
+        mapping: {
+          status: 'taught',
+          source: 'taught',
+          profileField: 'education[1].institution',
+          hasValue: true,
+        },
+      },
+    });
+    expect(calls).toEqual([]);
+    await fillOne(handle, previousUniversity, 'education[1].institution');
+    expect(calls.map((c) => c.instructions)).toEqual([
+      [
+        {
+          fieldId: 'id:pu',
+          value: 'Sample College',
+          expected: { type: 'text', htmlId: 'pu', label: 'Previous university' },
+        },
+      ],
+    ]);
+  });
+
+  it('teaches "Previous employer" → Work experience 2 → Company', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(recordsProfile, fillInTab);
+    await teach(handle, previousEmployer, 'workExperience[1].company');
+    await fillOne(handle, previousEmployer, 'workExperience[1].company');
+    expect(calls.map((c) => c.instructions.map((i) => i.value))).toEqual([
+      ['Previous Employer Ltd'],
+    ]);
+  });
+
+  it('stores a primary-record target under its scalar key', async () => {
+    const { handle } = await setup(recordsProfile);
+    await teach(handle, previousUniversity, 'education[0].institution');
+    expect(await handle({ type: MessageType.ListMappings }, EXTENSION_PAGE)).toMatchObject({
+      data: { mappings: [{ profileField: 'institution' }] },
+    });
+  });
+
+  it.each(['education[1].gpa', 'education.institution', 'education[20].institution', 'legacy'])(
+    'refuses to save the invalid target %j',
+    async (target) => {
+      const { handle } = await setup(recordsProfile);
+      expect(await teach(handle, previousUniversity, target)).toEqual({
+        ok: false,
+        error: 'invalid-mapping',
+      });
+    },
+  );
+
+  it('refuses an approval that does not match the taught record', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(recordsProfile, fillInTab);
+    await teach(handle, previousUniversity, 'education[1].institution');
+    const result = await fillOne(handle, previousUniversity, 'certifications[0].name');
+    expect(result).toMatchObject({ data: { results: [{ status: 'failed' }] } });
+    expect(calls).toEqual([]);
+  });
+
+  it('skips a taught record that does not exist (or was removed) instead of guessing', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle, store } = await setup(recordsProfile, fillInTab);
+    await teach(handle, previousUniversity, 'education[1].institution');
+    await store.set('profile', {
+      ...recordsProfile,
+      education: recordsProfile.education.slice(0, 1),
+    });
+    const mapped = await handle(
+      { type: MessageType.MapFields, payload: { fields: [previousUniversity] } },
+      EXTENSION_PAGE,
+    );
+    expect(mapped).toMatchObject({
+      data: { mappings: [{ status: 'taught', hasValue: false }], records: { education: 1 } },
+    });
+    expect(await fillOne(handle, previousUniversity, 'education[1].institution')).toMatchObject({
+      data: { results: [{ status: 'skipped' }] },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('deleting a mapping never changes the profile records', async () => {
+    const { handle, store } = await setup(recordsProfile);
+    await teach(handle, previousUniversity, 'education[1].institution');
+    const listed = await handle({ type: MessageType.ListMappings }, EXTENSION_PAGE);
+    const key = (listed as { data: { mappings: { key: string }[] } }).data.mappings[0]?.key ?? '';
+    await handle({ type: MessageType.DeleteMapping, payload: { key } }, EXTENSION_PAGE);
+    await handle({ type: MessageType.ClearMappings }, EXTENSION_PAGE);
+    expect(await store.get('profile')).toEqual(recordsProfile);
+  });
+
+  it('never sends record values to web pages', async () => {
+    const { handle } = await setup(recordsProfile);
+    const status = await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE);
+    expect(status).toMatchObject({ ok: true, data: { hasData: true } });
+    expect(Object.keys((status as { data: object }).data).sort()).toEqual([
+      'hasData',
+      'valueCount',
+    ]);
+    for (const value of RECORD_VALUES) expect(JSON.stringify(status)).not.toContain(value);
+    expect(await handle({ type: MessageType.GetProfile }, WEB_PAGE)).toEqual({
       ok: false,
       error: 'forbidden',
     });

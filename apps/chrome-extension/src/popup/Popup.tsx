@@ -1,6 +1,11 @@
 import type { FillResult, FormField } from '@applyonce/core';
 import { useState } from 'react';
-import type { PageScan, ProfileStatus, ReviewedMapping } from '../messaging/protocol';
+import type {
+  PageScan,
+  ProfileRecordCounts,
+  ProfileStatus,
+  ReviewedMapping,
+} from '../messaging/protocol';
 import {
   analyzeActiveTab,
   FAILURE_MESSAGES,
@@ -16,6 +21,7 @@ interface Analysis {
   site?: string;
   scan: PageScan;
   mappings: ReviewedMapping[];
+  records: ProfileRecordCounts;
 }
 
 type PopupState =
@@ -104,7 +110,7 @@ export function Popup() {
 }
 
 function AnalysisReview({ analysis }: { analysis: Analysis }) {
-  const { tabId, site, scan } = analysis;
+  const { tabId, site, scan, records } = analysis;
   const [mappings, setMappings] = useState(analysis.mappings);
   const [selected, setSelected] = useState(() => initialSelection(analysis.mappings));
   const [filling, setFilling] = useState(false);
@@ -205,6 +211,7 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
           mappings={mappingsById}
           selected={selected}
           results={resultsById}
+          records={records}
           disabled={filling}
           onToggle={toggle}
           onTeach={teach}

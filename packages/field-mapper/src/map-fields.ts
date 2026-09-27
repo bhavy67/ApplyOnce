@@ -1,10 +1,10 @@
 import {
-  PROFILE_FIELDS,
+  resolveProfileTarget,
   type ConfidenceResult,
   type FieldMapping,
   type FormField,
   type MappingResult,
-  type ProfileFieldKey,
+  type ProfileTarget,
   type SavedMapping,
   type UnsupportedReason,
 } from '@applyonce/core';
@@ -52,12 +52,13 @@ function mapField(
   const saved = [mappingKey, ...legacyKeys]
     .map((key) => (key ? savedMappings.get(key) : undefined))
     .find((mapping) => mapping !== undefined);
-  if (saved && isUsableSavedMapping(saved, field)) {
+  const target = saved && usableSavedTarget(saved, field);
+  if (target) {
     return withStatus(
       {
         ...base,
         source: 'taught',
-        profileField: saved.profileField,
+        profileField: target,
         confidence: TAUGHT_CONFIDENCE,
       },
       field,
@@ -86,18 +87,19 @@ function mapField(
   );
 }
 
-/** Saved data is re-validated on every use: same field type, and a type that can hold it. */
-function isUsableSavedMapping(saved: SavedMapping, field: FormField): boolean {
-  const definition = Object.hasOwn(PROFILE_FIELDS, saved.profileField)
-    ? PROFILE_FIELDS[saved.profileField]
-    : undefined;
-  return (
-    saved.parts.fieldType === field.type && definition?.fieldTypes.includes(field.type) === true
-  );
+/**
+ * Saved data is re-validated on every use: a canonical target (scalar key or record
+ * field), the same field type, and a type that can hold it. Returns the canonical target.
+ */
+function usableSavedTarget(saved: SavedMapping, field: FormField): ProfileTarget | undefined {
+  const definition = resolveProfileTarget(saved.profileField);
+  const usable =
+    saved.parts.fieldType === field.type && definition?.fieldTypes.includes(field.type) === true;
+  return usable ? definition.target : undefined;
 }
 
 function withStatus(
-  mapping: Omit<FieldMapping, 'status'> & { profileField: ProfileFieldKey },
+  mapping: Omit<FieldMapping, 'status'> & { profileField: ProfileTarget },
   field: FormField,
   status: 'mapped' | 'review' | 'taught',
 ): FieldMapping {
@@ -109,9 +111,11 @@ function withStatus(
 
 function findUnsupportedReason(
   field: FormField,
-  profileField: ProfileFieldKey,
+  profileField: ProfileTarget,
 ): UnsupportedReason | undefined {
-  if (!PROFILE_FIELDS[profileField].fieldTypes.includes(field.type)) return 'incompatible-type';
+  if (!resolveProfileTarget(profileField)?.fieldTypes.includes(field.type)) {
+    return 'incompatible-type';
+  }
   if (field.type === 'checkbox' && (field.groupSize ?? 1) > 1) return 'checkbox-group';
   if (field.custom && !field.custom.supported) return 'unsupported-control';
   if ((field.repeatedCount ?? 1) > 1) return 'repeated-question';

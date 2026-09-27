@@ -8,6 +8,7 @@ import {
   type Profile,
   type WorkMode,
 } from './profile';
+import { isBlankRecord } from './profile-values';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -19,12 +20,56 @@ type UnknownRecord = Record<string, unknown>;
  *
  * Version 1 → 2: the first education entry, work mode, and employment type become the
  * primary values. Any further entries are kept under `legacy`, never dropped.
+ *
+ * Version 2 → 3 (see migrateV2ToV3): the primary education record becomes education[0],
+ * work history moves to `workExperience`, and certifications start empty.
  */
 export function migrateProfile(stored: unknown): Profile | undefined {
   if (!isRecord(stored)) return undefined;
   if (stored.schemaVersion === PROFILE_SCHEMA_VERSION) return withDefaults(stored);
-  if (stored.schemaVersion === 1) return withDefaults(migrateV1ToV2(stored));
+  if (stored.schemaVersion === 2) return withDefaults(migrateV2ToV3(stored));
+  if (stored.schemaVersion === 1) return withDefaults(migrateV2ToV3(migrateV1ToV2(stored)));
   return undefined;
+}
+
+/**
+ * - The primary education record becomes education[0], unless it is blank (no empty record
+ *   is created). Education entries kept under `legacy` since version 1 follow it as
+ *   education[1…], in their original order; without a primary record they stay in
+ *   `legacy`, so a historical entry is never promoted to primary.
+ * - `experience.workHistory` entries (never editable before) become `workExperience`,
+ *   unchanged; blank ones are dropped. Current employment (current company, title, years)
+ *   stays as it is: no work experience entry is created from it, and no dates are invented.
+ * - `certifications` starts empty.
+ */
+function migrateV2ToV3(v2: UnknownRecord): UnknownRecord {
+  const primary = isRecord(v2.education) ? v2.education : {};
+  const legacy: UnknownRecord = isRecord(v2.legacy) ? { ...v2.legacy } : {};
+  const education: UnknownRecord[] = [];
+  if (!isBlankRecord(primary)) {
+    education.push(primary);
+    const earlier = asArray(legacy.education).filter(
+      (entry): entry is UnknownRecord => isRecord(entry) && !isBlankRecord(entry),
+    );
+    education.push(...earlier);
+    delete legacy.education;
+  }
+  const { workHistory, ...currentEmployment } = isRecord(v2.experience) ? v2.experience : {};
+  const workExperience = asArray(workHistory).filter(
+    (entry): entry is UnknownRecord => isRecord(entry) && !isBlankRecord(entry),
+  );
+
+  const migrated: UnknownRecord = {
+    ...v2,
+    schemaVersion: PROFILE_SCHEMA_VERSION,
+    education,
+    experience: currentEmployment,
+    workExperience,
+    certifications: [],
+  };
+  delete migrated.legacy;
+  if (Object.keys(legacy).length > 0) migrated.legacy = legacy;
+  return migrated;
 }
 
 function migrateV1ToV2(v1: UnknownRecord): UnknownRecord {
@@ -54,7 +99,7 @@ function migrateV1ToV2(v1: UnknownRecord): UnknownRecord {
 
   return {
     ...v1,
-    schemaVersion: PROFILE_SCHEMA_VERSION,
+    schemaVersion: 2,
     education: primaryEducation ?? {},
     preferences: {
       ...otherPreferences,
@@ -77,18 +122,18 @@ function withDefaults(stored: UnknownRecord): Profile {
     return fallback as Profile[K];
   };
 
-  const experience = section('experience');
+  const records = <K extends 'education' | 'workExperience' | 'certifications'>(key: K) =>
+    asArray(stored[key]).filter(isRecord) as unknown as Profile[K];
   const documents = section('documents');
   const profile: Profile = {
     schemaVersion: PROFILE_SCHEMA_VERSION,
     identity: section('identity'),
     contact: section('contact'),
     location: section('location'),
-    education: section('education'),
-    experience: {
-      ...experience,
-      workHistory: asArray(experience.workHistory) as Profile['experience']['workHistory'],
-    },
+    education: records('education'),
+    experience: section('experience'),
+    workExperience: records('workExperience'),
+    certifications: records('certifications'),
     links: section('links'),
     preferences: section('preferences'),
     authorization: section('authorization'),

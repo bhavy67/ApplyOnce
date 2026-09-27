@@ -1,6 +1,6 @@
 import type { ConfidenceResult } from './confidence';
 import type { FieldType } from './field-type';
-import type { ProfileFieldKey } from './profile-field';
+import type { ProfileTarget } from './profile-field';
 
 /**
  * - mapped: high-confidence automatic match, ready to fill once the user confirms.
@@ -31,8 +31,11 @@ export interface FieldMapping {
   fieldId: string;
   status: MappingStatus;
   source: MappingSource;
-  /** The best matching profile field; absent when status is "unknown". */
-  profileField?: ProfileFieldKey;
+  /**
+   * The best matching profile field; absent when status is "unknown". Automatic mappings
+   * are always scalar keys; a taught mapping may target a specific record.
+   */
+  profileField?: ProfileTarget;
   confidence: ConfidenceResult;
   unsupportedReason?: UnsupportedReason;
   /** Stable key used to save a taught mapping; absent when the field cannot be taught. */
@@ -62,7 +65,8 @@ export interface MappingKeyParts {
 export interface SavedMapping {
   key: string;
   parts: MappingKeyParts;
-  profileField: ProfileFieldKey;
+  /** A scalar key (all mappings saved before Phase 10) or a specific record's field. */
+  profileField: ProfileTarget;
   /** Hostname where the mapping was taught, for display only. Not part of the key. */
   site?: string;
   /** ISO 8601 timestamps. */

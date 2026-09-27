@@ -10,13 +10,15 @@ describe('countProfileValues', () => {
     const count = countProfileValues({
       ...createEmptyProfile(),
       identity: { firstName: 'Jane', lastName: '  ' },
-      experience: { totalExperienceYears: 0, workHistory: [] },
+      experience: { totalExperienceYears: 0 },
       authorization: { requiresSponsorship: false },
       preferences: { workMode: 'remote', employmentType: 'full-time' },
-      education: { institution: 'Example University', graduationYear: 2019 },
+      education: [{ institution: 'Example University', graduationYear: 2019 }, {}],
+      workExperience: [{ company: 'Example Co', current: true }],
+      certifications: [{ name: '  ' }],
       legacy: { workModes: ['hybrid'] },
     });
 
-    expect(count).toBe(7);
+    expect(count).toBe(9);
   });
 });

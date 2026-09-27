@@ -1,12 +1,13 @@
 import { PROFILE_FIELD_KEYS, PROFILE_FIELDS } from '@applyonce/core';
 import { normalizeChoice } from './choices';
 import type { Profile } from './profile';
-import { readStoredValue, updateProfileValue } from './profile-values';
+import { isBlankRecord, readStoredValue, updateProfileValue } from './profile-values';
 
 /**
  * Prepares an edited profile for storage: trims text, treats blank text as "not
  * provided" (the property is removed), stores choice fields in their canonical form
- * ("Full Time" → "full-time"), and drops work history entries left completely empty.
+ * ("Full Time" → "full-time"), and drops records (education, work experience,
+ * certifications) left completely empty. Partially filled records are kept as they are.
  */
 export function sanitizeProfile(profile: Profile): Profile {
   // Safe cast: sanitizeValue preserves the shape; it only removes blank optional values.
@@ -21,10 +22,9 @@ export function sanitizeProfile(profile: Profile): Profile {
   }
   return {
     ...clean,
-    experience: {
-      ...clean.experience,
-      workHistory: clean.experience.workHistory.filter(hasAnyValue),
-    },
+    education: clean.education.filter((record) => !isBlankRecord(record)),
+    workExperience: clean.workExperience.filter((record) => !isBlankRecord(record)),
+    certifications: clean.certifications.filter((record) => !isBlankRecord(record)),
   };
 }
 
@@ -44,8 +44,4 @@ function sanitizeValue(value: unknown): unknown {
     );
   }
   return value;
-}
-
-function hasAnyValue(entry: object): boolean {
-  return Object.keys(entry).length > 0;
 }

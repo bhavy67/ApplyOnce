@@ -11,13 +11,30 @@ describe('sanitizeProfile', () => {
     expect(profile.identity).toEqual({ firstName: 'Jane' });
   });
 
-  it('drops empty work history entries and keeps filled ones', () => {
+  it('drops completely blank records in every collection and keeps partial ones', () => {
     const profile = sanitizeProfile({
       ...createEmptyProfile(),
-      experience: { workHistory: [{ company: ' ' }, { company: 'Example Co' }] },
+      education: [{ institution: ' ' }, {}, { fieldOfStudy: ' Physics ' }],
+      workExperience: [{ company: ' ', title: '' }, { company: 'Example Co' }],
+      certifications: [{}, { name: 'Example Cert', issueYear: 2022 }, { credentialUrl: '' }],
     });
 
-    expect(profile.experience.workHistory).toEqual([{ company: 'Example Co' }]);
+    expect(profile.education).toEqual([{ fieldOfStudy: 'Physics' }]);
+    expect(profile.workExperience).toEqual([{ company: 'Example Co' }]);
+    expect(profile.certifications).toEqual([{ name: 'Example Cert', issueYear: 2022 }]);
+  });
+
+  it('keeps record order and a record with only the current flag', () => {
+    const profile = sanitizeProfile({
+      ...createEmptyProfile(),
+      workExperience: [{ company: 'B Co' }, { current: true }, { company: 'A Co' }],
+    });
+
+    expect(profile.workExperience).toEqual([
+      { company: 'B Co' },
+      { current: true },
+      { company: 'A Co' },
+    ]);
   });
 
   it('stores choice fields in canonical form', () => {
@@ -35,22 +52,22 @@ describe('sanitizeProfile', () => {
   it('keeps the primary education record and legacy data', () => {
     const profile = sanitizeProfile({
       ...createEmptyProfile(),
-      education: { institution: ' Example University ', degree: '' },
+      education: [{ institution: ' Example University ', degree: '' }],
       legacy: { education: [{ institution: 'Second School' }] },
     });
 
-    expect(profile.education).toEqual({ institution: 'Example University' });
+    expect(profile.education).toEqual([{ institution: 'Example University' }]);
     expect(profile.legacy).toEqual({ education: [{ institution: 'Second School' }] });
   });
 
   it('keeps numbers, booleans, and empty required sections', () => {
     const profile = sanitizeProfile({
       ...createEmptyProfile(),
-      experience: { totalExperienceYears: 0, workHistory: [] },
+      experience: { totalExperienceYears: 0 },
       authorization: { requiresSponsorship: false },
     });
 
-    expect(profile.experience).toEqual({ totalExperienceYears: 0, workHistory: [] });
+    expect(profile.experience).toEqual({ totalExperienceYears: 0 });
     expect(profile.authorization).toEqual({ requiresSponsorship: false });
     expect(profile.documents).toEqual({ resumes: [], coverLetters: [] });
   });

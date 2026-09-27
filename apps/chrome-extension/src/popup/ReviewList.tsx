@@ -1,6 +1,6 @@
 import type { FillResult, FormField } from '@applyonce/core';
 import { useId, useState } from 'react';
-import type { ReviewedMapping } from '../messaging/protocol';
+import type { ProfileRecordCounts, ReviewedMapping } from '../messaging/protocol';
 import { fieldDisplayName } from './analyze-page';
 import {
   canTeach,
@@ -18,6 +18,8 @@ interface ReviewListProps {
   mappings: ReadonlyMap<string, ReviewedMapping>;
   selected: ReadonlySet<string>;
   results: ReadonlyMap<string, FillResult>;
+  /** Record counts, so Teach Once offers only records the profile has. */
+  records: ProfileRecordCounts;
   disabled: boolean;
   onToggle: (fieldId: string, selected: boolean) => void;
   /** Saves a taught mapping; resolves to an error message, or undefined on success. */
@@ -48,6 +50,7 @@ function ReviewItem({
   mapping,
   selected,
   results,
+  records,
   disabled,
   onToggle,
   onTeach,
@@ -92,6 +95,7 @@ function ReviewItem({
         (teaching ? (
           <TeachEditor
             field={field}
+            records={records}
             current={mapping.profileField}
             onCancel={() => setTeaching(false)}
             onSave={async (profileField) => {
@@ -116,15 +120,16 @@ function ReviewItem({
 
 interface TeachEditorProps {
   field: FormField;
+  records: ProfileRecordCounts;
   current: string | undefined;
   onSave: (profileField: string) => Promise<string | undefined>;
   onCancel: () => void;
 }
 
 /** Choose a profile field (only ones this field type can hold). No free-text values. */
-function TeachEditor({ field, current, onSave, onCancel }: TeachEditorProps) {
+function TeachEditor({ field, records, current, onSave, onCancel }: TeachEditorProps) {
   const selectId = useId();
-  const options = teachOptions(field.type);
+  const groups = teachOptions(field.type, records);
   const [choice, setChoice] = useState(current ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -140,10 +145,14 @@ function TeachEditor({ field, current, onSave, onCancel }: TeachEditorProps) {
       <label htmlFor={selectId}>Map to</label>
       <select id={selectId} value={choice} onChange={(event) => setChoice(event.target.value)}>
         <option value="">Choose a profile field…</option>
-        {options.map((option) => (
-          <option key={option.key} value={option.key}>
-            {option.label}
-          </option>
+        {groups.map((group) => (
+          <optgroup key={group.label} label={group.label}>
+            {group.options.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
       <div className="teach-actions">

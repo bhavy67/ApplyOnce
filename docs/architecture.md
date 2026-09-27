@@ -21,17 +21,31 @@ apps/chrome-extension ──► adapters/generic ──► packages/field-mapper
 
 ## Canonical profile fields
 
-`PROFILE_FIELDS` (`packages/core/profile-field.ts`) is the single source of truth for every
-mappable profile field: key, path (`<section>.<property>`, always two levels), label, editor
-section, value kind (`text`, `email`, `phone`, `url`, `years`, `year`, `boolean`, `choice`),
-supported form field types, and choices. Consumers:
+`packages/core/profile-field.ts` is the single source of truth for every mappable profile
+field. `PROFILE_FIELDS` holds scalar fields: key, path (`<section>.<property>`, or
+`education[0].<property>` for a primary-record field), label, editor section, value kind
+(`text`, `email`, `phone`, `url`, `years`, `year`, `month`, `boolean`, `choice`), supported
+form field types, and choices. `PROFILE_RECORD_COLLECTIONS` / `PROFILE_RECORD_FIELDS` hold
+repeatable records (Phase 10): per field its collection, record property, label, kind, form
+field types, `teachable`, and `primaryKey` (the scalar key that is this field of record 0).
+The four primary education scalars are built from their record definitions
+(`primaryRecordField`), so there is one definition and one stored value.
+
+**Targets.** A mapping points to a `ProfileTarget`: a scalar key, or a record reference
+`<collection>[<index>].<field>`. `resolveProfileTarget` is the only interpreter: it accepts
+scalar keys and record references matching a strict pattern with a defined field and an
+index below `MAX_PROFILE_RECORDS` (20), canonicalizes `education[0].<field>` to its scalar
+key, and returns label ("Education 2 → Institution"), path, kind, and field types. Anything
+else is rejected; targets are never evaluated as object paths. Consumers:
 
 - profile editor (`ProfileForm.tsx`): sections, inputs, and error lookup are generated from it;
 - validation (`validateProfile`): per value kind;
-- value access (`getProfileValue`, `readStoredValue`, `updateProfileValue`): only through
-  canonical paths, so arbitrary paths can never be read or written;
-- mapper: field-type compatibility;
-- Teach selector and saved-mapping validation: `PROFILE_FIELD_KEYS` filtered by field type.
+- value access (`getProfileValue`, `readStoredValue`, `updateProfileValue`, and the record
+  operations `addRecord`, `removeRecord`, `moveRecord`, `updateRecordValue`): only through
+  resolved targets, so arbitrary paths can never be read or written;
+- mapper: field-type compatibility (saved targets re-resolved on every use); the automatic
+  matcher only produces scalar keys;
+- Teach selector (`teachOptions(fieldType, recordCounts)`) and saved-mapping validation.
 
 Keys are stable identifiers stored in saved mappings: add keys, never rename or remove them
 without a mapping migration. Aliases stay in `field-mapper/aliases.ts` (matching knowledge,
@@ -40,12 +54,20 @@ review.
 
 ## Profile schema and migration
 
-`PROFILE_SCHEMA_VERSION` is 2. `migrateProfile` (`packages/profile`) is pure and
-idempotent: version 2 gets missing sections filled with empty defaults; version 1 (Phases
-1–4) has its education list, work modes, and employment types reduced to single primary
-values, with every additional entry kept under `profile.legacy` (read-only, never filled).
-Unknown versions return undefined and `ProfileRepository.load` throws, so data is refused
-rather than overwritten. Loading never writes; the next save stores version 2.
+`PROFILE_SCHEMA_VERSION` is 3. `migrateProfile` (`packages/profile`) is pure and
+idempotent, and chains steps: version 1 (Phases 1–4) → 2 reduces the education list, work
+modes, and employment types to single primary values, keeping additional entries under
+`profile.legacy`; version 2 (Phases 5–9) → 3 turns the primary education object into
+`education[0]` (followed by any legacy education entries; blank data creates no record),
+moves `experience.workHistory` to `workExperience`, and adds `certifications: []`. Current
+employment is untouched and nothing is fabricated. Version 3 gets missing sections filled
+with empty defaults and non-object records dropped. Unknown or newer versions return
+undefined and `ProfileRepository.load` throws, so data is refused rather than overwritten.
+Loading never writes; the next save stores version 3. `sanitizeProfile` drops completely
+blank records on save.
+
+Saved mappings need no migration: their `profileField` was always a scalar key, which is
+still a valid target (the primary education keys now resolve to `education[0]`).
 
 ## Local persistence
 
@@ -239,8 +261,9 @@ profile page ── ListMappings / DeleteMapping / ClearMappings ──► servi
   disabled, or incompatible fields are `unsupported` whatever the source.
 - **Storage** (`storage/saved-mapping-repository.ts`): one `savedMappings` record
   (`{ version: 1, mappings }`) in the extension's IndexedDB, behind `LocalStore`. The
-  repository is browser-independent code. It validates the profile field
-  (`isProfileFieldKey`, no arbitrary paths) and field-type compatibility before writing,
+  repository is browser-independent code. It validates the target
+  (`resolveProfileTarget`, no arbitrary paths) and field-type compatibility before writing,
+  stores the canonical target,
   copies only known key-part fields, upserts by key (keeping `createdAt`), and serializes
   writes. An unknown stored version is refused, not discarded. The service worker is the
   only writer; if mappings can't be read, mapping falls back to automatic only.
@@ -249,6 +272,9 @@ profile page ── ListMappings / DeleteMapping / ClearMappings ──► servi
 - **Access**: `SaveMapping`, `ListMappings`, `DeleteMapping`, `ClearMappings` are accepted
   only from extension pages. Content scripts can send `GetProfileStatus` and nothing else to
   the service worker.
+- **Record targets** (Phase 10): `MapFields` also returns `records` (the number of records
+  per collection, never values) so the popup can offer Teach targets for existing records
+  only. A taught record target whose record is missing reports `hasValue: false`.
 - **Filling**: unchanged safety model. `FillPage` re-runs the precedence check with the
   current saved mappings, so only fields currently mapped/review/taught to the approved
   profile field are filled, and only their values are sent to the content script.

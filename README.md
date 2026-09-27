@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 9 — Workday autocomplete / search fields: complete.**
+**Phase 10 — Repeatable profile records: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -34,6 +34,10 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 9: Workday search-as-you-type fields (e.g. "School or University") are filled by
   typing the approved value once and choosing the one suggestion that matches it exactly,
   confirmed before success. See [Search fields](#search-fields-workday-autocomplete).
+- Phase 10: the profile holds several education entries, work experience entries, and
+  certifications, edited on the profile page and targetable with Teach Once. See
+  [Repeatable records](#repeatable-records). **Phase 10 stores repeatable profile data. It
+  does not yet automatically fill repeated application sections.**
 
 Nothing is ever submitted. Greenhouse gets dedicated support in a later phase; until then
 it is handled by the generic adapter.
@@ -117,7 +121,9 @@ message. ApplyOnce never restarts itself.
 
 1. Click the ApplyOnce toolbar icon, then **Manage Profile**. (The profile page is also the
    extension's options page: right-click the icon → **Options**.)
-2. Fill in whatever you want to reuse. Every field is optional.
+2. Fill in whatever you want to reuse. Every field is optional. Education, Work
+   experience, and Certifications are lists: **+ Add …** adds an entry, and each entry has
+   ↑ / ↓ (reorder) and **Remove**.
 3. Press **Save profile** (or Enter). Invalid values are highlighted and nothing is saved
    until they are fixed; otherwise "Profile saved" appears.
 4. **Clear profile…** asks for confirmation, then deletes the saved profile.
@@ -127,11 +133,11 @@ confirmation.
 
 ### Model and fields
 
-The model lives in `packages/profile` (`Profile`, schema version 2). Every mappable field is
-defined once, in `PROFILE_FIELDS` (`packages/core`): its canonical key, path, label, editor
-section, value kind, supported form field types, and choices. That single table drives the
-profile editor, validation, value lookup, the mapper, the Teach selector, and saved-mapping
-validation.
+The model lives in `packages/profile` (`Profile`, schema version 3). Every mappable field is
+defined once, in `packages/core/profile-field.ts`: scalar fields in `PROFILE_FIELDS` (canonical
+key, path, label, editor section, value kind, supported form field types, choices) and
+record fields in `PROFILE_RECORD_FIELDS` (below). Those definitions drive the profile editor,
+validation, value lookup, the mapper, the Teach selector, and saved-mapping validation.
 
 | Section              | Fields (canonical key → path)                                                                        |
 | -------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -140,37 +146,103 @@ validation.
 | Professional         | `linkedin_url`, `github_url`, `portfolio_url`, `website_url` → `links.*`                             |
 | Employment           | `current_title`, `current_company`, `experience_years`, `notice_period` → `experience.*`             |
 | Job preferences      | `work_mode`, `employment_type`, `willing_to_relocate` → `preferences.*`                              |
-| Education            | `highest_degree`, `field_of_study`, `institution`, `graduation_year` → `education.*`                 |
+| Education            | `highest_degree`, `field_of_study`, `institution`, `graduation_year` → `education[0].*` (primary)    |
 | Authorization        | `work_authorization`, `requires_sponsorship` → `authorization.*`                                     |
 
 - **Value types:** every value is a single string, number, or boolean. Work mode is one of
   remote / hybrid / onsite; employment type is one of full-time / part-time / contract /
   internship / temporary.
-- **One primary record, not lists:** `education` is your primary (highest) education, and
-  the employment fields describe your current job. Multiple degrees, schools, employers, or
-  certifications are **not supported yet**; that needs repeatable sections, a later phase.
-  `experience.workHistory`, documents, and custom answers remain in the model without UI and
-  are preserved when saving.
+- **Repeatable records** are described in [Repeatable records](#repeatable-records).
+  Documents and custom answers remain in the model without UI and are preserved when saving.
 - **Validation** (`validateProfile`) checks each value by its kind: email, phone, URL, years
-  of experience (0–70), graduation year (1950 to 10 years ahead), yes/no, and choices. Blank
+  of experience (0–70), years (1950 to 10 years ahead), months (`YYYY-MM`), yes/no, and
+  choices, for scalar fields and for every field of every record. Blank
   fields are always valid, so a partial profile can be saved. Completeness is separate and
   not implemented.
 - **Normalization:** choice values ignore case, spacing, hyphens, and underscores ("REMOTE",
   "On-site", "full_time", "Full Time" all work) and are stored canonically on save. No
   synonyms beyond that. **Sanitizing** on save also trims text and removes blank values.
 
+### Repeatable records
+
+| Collection (`Profile.*`) | Record fields                                                                                |
+| ------------------------ | -------------------------------------------------------------------------------------------- |
+| `education`              | institution, degree, fieldOfStudy, startYear, graduationYear                                 |
+| `workExperience`         | company, title, location, startDate, endDate (`YYYY-MM` text), current (yes/no), description |
+| `certifications`         | name, issuer, issueYear, credentialUrl                                                       |
+
+Each record field definition names its collection, record property, label, value kind,
+supported form field types, and whether Teach Once may target it.
+
+- **Primary education (one source of truth).** `education[0]` is the primary (highest)
+  record. The long-standing keys `institution`, `field_of_study`, `highest_degree`, and
+  `graduation_year` are not separate values: their definitions are derived from the
+  education record fields, and they read and write `education[0]`. The editor shows
+  "Education 1 (primary)" with those labels, even before it has a value. Reordering or
+  removing records changes which record is primary.
+- **Current employment stays separate.** `current_title`, `current_company`, and
+  `experience_years` remain single values under `experience`. Work experience entries are
+  an independent list: nothing is copied or synchronized between them, and no entry is
+  created from the current-employment fields.
+- **Blank and partial records.** Adding an entry creates an editable blank record; removing
+  it deletes it. On save, records left completely blank are dropped; partially filled
+  records are kept. Every value is optional; populated values are validated by kind, and a
+  current role (`current`) may not also have an end date. Dates are kept as `YYYY-MM` text
+  and never parsed further.
+- **Limit.** At most 20 entries per collection (`MAX_PROFILE_RECORDS`): generous for a real
+  history, and a bound on storage and on the Teach selector. **+ Add** is disabled at the
+  limit; there is no pagination.
+- **Value lookup.** `getProfileValue` accepts a scalar key (`institution`) or a record
+  reference (`education[1].institution`, `workExperience[0].company`,
+  `certifications[0].name`). Record references must match
+  `<collection>[<index>].<field>` exactly, with a defined field and an index below the
+  limit; anything else (other paths, `__proto__`, out-of-range or missing records) returns
+  no value. `education[0].<field>` is the same target as its scalar key.
+- **Mapping.** Automatic mapping only ever targets scalar keys, so it fills the primary
+  education record and current employment. It never decides which historical record
+  matches a page field: previous schools, employers, and certifications are filled only
+  through a Teach Once mapping to a specific record.
+- **Teach Once targets.** The selector groups targets as in the editor: scalar sections, then
+  "Education 1 (primary)", "Education 2", "Work experience 1", "Certification 1", … for the
+  records the profile has (the popup receives record counts only, never values). Options read
+  "Education 2 → Institution". A taught mapping stores the target (e.g.
+  `education[1].institution`); mappings saved before Phase 10 store scalar keys, which still
+  resolve unchanged. Targets are positions: after reordering, "Education 2" means whatever is
+  second, and a mapping to a record that no longer exists shows "No value in your profile".
+  As before, teaching never fills, taught fields start unticked, and deleting a mapping never
+  changes the profile.
+- **Privacy.** Records stay in the extension's IndexedDB. Only the approved value for each
+  approved field reaches the content script; no record lists, counts, or other values do.
+- **Not implemented yet:** filling repeated application sections (e.g. Workday's education
+  and work-experience blocks), choosing which record fits which section, and clicking "Add
+  Education" / "Add Work Experience". Repeated questions on a page stay unsupported.
+
 ### Migration
 
-Profiles saved by Phases 1–4 (schema version 1) are migrated when loaded
-(`migrateProfile`, pure and idempotent):
+Profiles are migrated when loaded (`migrateProfile`, pure, deterministic, idempotent, and
+non-destructive; the stored data is never modified in place).
+
+Version 2 (Phases 5–9) → 3:
+
+- the primary education record becomes `education[0]` (a blank one creates no record);
+- education entries kept under `legacy` since version 1 become `education[1…]` in their
+  original order (without a primary record they stay in `legacy`, so a historical entry is
+  never promoted to primary);
+- `experience.workHistory` entries (stored but never editable before) move unchanged to
+  `workExperience`; current company, title, and years stay where they were; no work
+  experience entry is created and no dates are invented;
+- `certifications` starts empty.
+
+Version 1 (Phases 1–4) is first brought to version 2:
 
 - the first education entry becomes the primary education record;
 - the first selected work mode and employment type become the single values;
-- any **additional** entries (a second degree, a second work mode, …) are kept under
-  `legacy`, shown read-only at the bottom of the profile page as "Kept from an earlier
-  version", and never used for filling. Nothing is dropped.
+- any **additional** entries are kept under `legacy` (and, for education, become records in
+  the step to version 3). Additional work modes and employment types stay in `legacy`, shown
+  read-only at the bottom of the profile page as "Kept from an earlier version", and never
+  used for filling. Nothing is dropped.
 
-New fields start empty. Loading never writes: the migrated profile is stored (as version 2)
+New fields start empty. Loading never writes: the migrated profile is stored (as version 3)
 the next time you save. Unknown or newer versions are refused, never overwritten. Saved
 field mappings are a separate record and are untouched; every existing profile field key
 still exists, so they keep working. A mapping to a key that no longer exists is ignored
@@ -185,9 +257,10 @@ extension is uninstalled. Nothing is sent anywhere; there is no backend.
 Storage code lives only in the extension (`apps/chrome-extension/src/storage`), behind the
 `LocalStore` interface from `packages/core`. Two version numbers exist:
 
-- `Profile.schemaVersion` (currently 1): the shape of the profile. Loading a profile with an
-  unknown version fails loudly instead of discarding it; migrations will go in
-  `profile-repository.ts` when the version is bumped.
+- `Profile.schemaVersion` (currently 3): the shape of the profile. Loading a profile with an
+  unknown or newer version fails loudly instead of discarding it; migrations live in
+  `packages/profile/src/migrate-profile.ts`. **Clear profile** deletes the whole profile,
+  records included; saved field mappings are kept.
 - The IndexedDB database version: the object-store layout.
 
 To inspect stored data during development, open the profile page, then DevTools →
@@ -585,8 +658,8 @@ single classic script, because MV3 content scripts cannot be ES modules.
 - Workday multi-page navigation, repeated record sections, multi-select search fields
   (several pills), replacing an existing search selection, and verification against a real
   Workday application form (it requires sign-in)
-- Repeatable sections: multiple degrees, schools, employers, work history entries, or
-  certifications (education and employment are single primary records)
+- Automatically filling repeated application sections from profile records (the records are
+  stored and can be targeted with Teach Once; see Repeatable records)
 - Editing `legacy` values carried over by migration (they are read-only)
 - Scoping saved mappings to a site, similarity-based matching of saved mappings, and
   mapping edits from the management view (delete and re-teach instead)
@@ -597,7 +670,7 @@ single classic script, because MV3 content scripts cannot be ES modules.
 - `contenteditable` / rich-text fields (see Generic form compatibility)
 - Multi-option checkbox groups (the profile has no multi-value fields)
 - Profile completeness checks
-- Editing work history, documents, and custom answers in the UI
+- Editing documents and custom answers in the UI
 - Encryption at rest of the local profile
 - Android app (`android/` will be added in Phase 7)
 - Encrypted sync, backend, accounts

@@ -145,3 +145,48 @@ export function SelectField({ label, options, value, onChange, error }: SelectFi
     </FieldFrame>
   );
 }
+
+interface TextAreaFieldProps {
+  label: string;
+  value: string | undefined;
+  onChange: (value: string) => void;
+  error?: string;
+}
+
+export function TextAreaField({ label, value, onChange, error }: TextAreaFieldProps) {
+  return (
+    <FieldFrame label={label} error={error}>
+      {({ id, describedBy }) => (
+        <textarea
+          id={id}
+          rows={3}
+          value={value ?? ''}
+          onChange={(event) => onChange(event.target.value)}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+        />
+      )}
+    </FieldFrame>
+  );
+}
+
+interface CheckboxFieldProps {
+  label: string;
+  value: boolean;
+  onChange: (value: boolean) => void;
+}
+
+export function CheckboxField({ label, value, onChange }: CheckboxFieldProps) {
+  const id = useId();
+  return (
+    <div className="field checkbox-field">
+      <input
+        id={id}
+        type="checkbox"
+        checked={value}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <label htmlFor={id}>{label}</label>
+    </div>
+  );
+}

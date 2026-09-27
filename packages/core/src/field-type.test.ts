@@ -37,10 +37,13 @@ describe('profile field definitions', () => {
   });
 
   it.each(definitions)(
-    '%s has a label, a two-level path, a section, and field types',
+    '%s has a label, a canonical path, a section, and field types',
     (_, field) => {
       expect(field.label.trim()).not.toBe('');
-      expect(field.path).toMatch(/^[a-z]+\.[A-Za-z]+$/);
+      // "<section>.<property>", or "<collection>[0].<property>" for a primary-record field.
+      expect(field.path).toMatch(
+        field.record ? /^[A-Za-z]+\[0\]\.[A-Za-z]+$/ : /^[a-z]+\.[A-Za-z]+$/,
+      );
       expect(PROFILE_SECTIONS).toContain(field.section);
       expect(field.fieldTypes.length).toBeGreaterThan(0);
       expect(field.fieldTypes.every(isFieldType)).toBe(true);
@@ -66,6 +69,10 @@ describe('profile field definitions', () => {
       'portfolio_url',
       'willing_to_relocate',
       'requires_sponsorship',
+      'institution',
+      'field_of_study',
+      'highest_degree',
+      'graduation_year',
     ]) {
       expect(PROFILE_FIELD_KEYS).toContain(key);
     }

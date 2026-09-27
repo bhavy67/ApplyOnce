@@ -1,11 +1,10 @@
 import {
-  PROFILE_FIELDS,
+  resolveProfileTarget,
   type LocalStore,
   type MappingKeyParts,
   type SavedMapping,
 } from '@applyonce/core';
 import { mappingKeyFromParts } from '@applyonce/field-mapper';
-import { isProfileFieldKey } from '@applyonce/profile';
 import type { ExtensionStorageSchema } from './profile-repository';
 
 /** Bump when the stored shape changes; unknown versions are refused, never discarded. */
@@ -19,7 +18,10 @@ export interface SavedMappingsRecord {
 
 export interface SaveMappingInput {
   parts: MappingKeyParts;
-  /** Must be a canonical profile field key; validated before anything is stored. */
+  /**
+   * A canonical profile field key or record field (e.g. "education[1].institution");
+   * validated, and stored in canonical form, before anything is stored.
+   */
   profileField: string;
   site?: string;
 }
@@ -91,10 +93,11 @@ export function createSavedMappingRepository(
     },
 
     save({ parts, profileField, site }) {
-      if (!isProfileFieldKey(profileField)) {
+      const target = resolveProfileTarget(profileField);
+      if (!target) {
         return Promise.resolve({ ok: false, error: 'invalid-profile-field' });
       }
-      if (!PROFILE_FIELDS[profileField].fieldTypes.includes(parts.fieldType)) {
+      if (!target.fieldTypes.includes(parts.fieldType)) {
         return Promise.resolve({ ok: false, error: 'incompatible-field-type' });
       }
       return serialized(async () => {
@@ -105,7 +108,7 @@ export function createSavedMappingRepository(
         const mapping: SavedMapping = {
           key,
           parts: pickKeyParts(parts),
-          profileField,
+          profileField: target.target,
           ...(site ? { site } : {}),
           createdAt: existing?.createdAt ?? timestamp,
           updatedAt: timestamp,

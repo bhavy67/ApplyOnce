@@ -1,14 +1,20 @@
 import {
   PROFILE_FIELD_KEYS,
   PROFILE_FIELDS,
+  PROFILE_RECORD_COLLECTION_DEFINITIONS,
+  PROFILE_RECORD_COLLECTIONS,
+  PROFILE_SECTIONS,
+  recordFieldsOf,
+  recordTarget,
+  resolveProfileTarget,
   type ConfidenceLevel,
   type FieldType,
   type FillResult,
   type FillStatus,
-  type ProfileFieldKey,
+  type ProfileTarget,
   type UnsupportedReason,
 } from '@applyonce/core';
-import type { ReviewedMapping } from '../messaging/protocol';
+import type { ProfileRecordCounts, ReviewedMapping } from '../messaging/protocol';
 
 export const CONFIDENCE_LABELS: Readonly<Record<ConfidenceLevel, string>> = {
   high: 'High confidence',
@@ -56,9 +62,8 @@ export function initialSelection(mappings: readonly ReviewedMapping[]): Set<stri
 }
 
 export function profileFieldDescription(mapping: ReviewedMapping): string | undefined {
-  if (!mapping.profileField) return undefined;
-  const { label, path } = PROFILE_FIELDS[mapping.profileField];
-  return `${label} (${path})`;
+  const target = resolveProfileTarget(mapping.profileField);
+  return target && `${target.label} (${target.path})`;
 }
 
 /** Distinguishes what the user taught from what was inferred automatically. */
@@ -78,11 +83,55 @@ export function teachActionLabel(mapping: ReviewedMapping): 'Teach' | 'Change' {
   return mapping.status === 'mapped' || mapping.status === 'taught' ? 'Change' : 'Teach';
 }
 
-/** Profile fields a field of this type can hold, from the canonical field definitions. */
-export function teachOptions(fieldType: FieldType): { key: ProfileFieldKey; label: string }[] {
-  return PROFILE_FIELD_KEYS.filter((key) => PROFILE_FIELDS[key].fieldTypes.includes(fieldType)).map(
-    (key) => ({ key, label: PROFILE_FIELDS[key].label }),
-  );
+export interface TeachOption {
+  key: ProfileTarget;
+  label: string;
+}
+
+export interface TeachOptionGroup {
+  label: string;
+  options: TeachOption[];
+}
+
+/**
+ * Profile fields a field of this type can hold, grouped as in the profile editor, from the
+ * canonical definitions and the number of records the profile has (never their values).
+ * Scalar fields come by section; each existing record is its own group ("Education 2"), and
+ * Education 1 (primary) is always offered, as its fields were before records existed. Its
+ * fields keep their scalar keys, so mappings taught to them are the same as before.
+ */
+export function teachOptions(
+  fieldType: FieldType,
+  records: ProfileRecordCounts,
+): TeachOptionGroup[] {
+  const groups: TeachOptionGroup[] = [];
+  for (const section of PROFILE_SECTIONS) {
+    const scalars = PROFILE_FIELD_KEYS.filter(
+      (key) =>
+        PROFILE_FIELDS[key].section === section &&
+        !PROFILE_FIELDS[key].record &&
+        PROFILE_FIELDS[key].fieldTypes.includes(fieldType),
+    ).map((key) => ({ key, label: PROFILE_FIELDS[key].label }));
+    if (scalars.length > 0) groups.push({ label: section, options: scalars });
+
+    for (const collection of PROFILE_RECORD_COLLECTIONS) {
+      const definition = PROFILE_RECORD_COLLECTION_DEFINITIONS[collection];
+      if (definition.section !== section) continue;
+      const count = Math.max(records[collection], collection === 'education' ? 1 : 0);
+      for (let index = 0; index < count; index++) {
+        const options = recordFieldsOf(collection)
+          .filter((field) => field.teachable && field.fieldTypes.includes(fieldType))
+          .map((field) => {
+            const key = recordTarget(collection, index, field.field);
+            return { key, label: resolveProfileTarget(key)?.label ?? field.label };
+          });
+        const role = index === 0 && definition.firstRecordRole;
+        const label = `${definition.itemLabel} ${index + 1}${role ? ` (${role})` : ''}`;
+        if (options.length > 0) groups.push({ label, options });
+      }
+    }
+  }
+  return groups;
 }
 
 export function mappingNote(mapping: ReviewedMapping, selected: boolean): string {

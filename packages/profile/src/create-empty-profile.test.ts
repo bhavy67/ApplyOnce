@@ -8,8 +8,10 @@ describe('createEmptyProfile', () => {
       identity: {},
       contact: {},
       location: {},
-      education: {},
-      experience: { workHistory: [] },
+      education: [],
+      experience: {},
+      workExperience: [],
+      certifications: [],
       links: {},
       preferences: {},
       authorization: {},
@@ -21,11 +23,13 @@ describe('createEmptyProfile', () => {
   it('returns independent instances', () => {
     const a = createEmptyProfile();
     const b = createEmptyProfile();
-    a.education.institution = 'Example University';
-    a.experience.workHistory.push({ company: 'Example Co' });
+    a.education.push({ institution: 'Example University' });
+    a.workExperience.push({ company: 'Example Co' });
+    a.certifications.push({ name: 'Example Cert' });
 
-    expect(b.education).toEqual({});
-    expect(b.experience.workHistory).toEqual([]);
+    expect(b.education).toEqual([]);
+    expect(b.workExperience).toEqual([]);
+    expect(b.certifications).toEqual([]);
   });
 
   it('can represent a partially completed profile', () => {

@@ -1,5 +1,4 @@
-import { PROFILE_FIELDS, type MappingKeyParts, type SavedMapping } from '@applyonce/core';
-import { isProfileFieldKey } from '@applyonce/profile';
+import { resolveProfileTarget, type MappingKeyParts, type SavedMapping } from '@applyonce/core';
 import { useEffect, useState } from 'react';
 import { MessageType } from '../messaging/protocol';
 import { sendToServiceWorker } from '../messaging/send';
@@ -118,9 +117,8 @@ async function fetchMappings(): Promise<ListState> {
 
 /** A mapping may point to a field this version no longer has; it is then never applied. */
 function describeTarget(profileField: string): string {
-  if (!isProfileFieldKey(profileField)) return 'Unknown profile field (not used)';
-  const { label, path } = PROFILE_FIELDS[profileField];
-  return `${label} (${path})`;
+  const target = resolveProfileTarget(profileField);
+  return target ? `${target.label} (${target.path})` : 'Unknown profile field (not used)';
 }
 
 function describeParts(parts: MappingKeyParts): string {

@@ -12,7 +12,14 @@ const sampleProfile: Profile = {
   ...createEmptyProfile(),
   identity: { firstName: 'Jane', lastName: 'Doe' },
   contact: { email: 'jane@example.com' },
-  education: { institution: 'Example University', graduationYear: 2019 },
+  education: [
+    { institution: 'Example University', graduationYear: 2019 },
+    { institution: 'Sample College' },
+  ],
+  workExperience: [
+    { company: 'Example Co', title: 'Engineer', startDate: '2021-06', current: true },
+  ],
+  certifications: [{ name: 'Example Certified', credentialUrl: 'https://cert.example.com/1' }],
 };
 
 describe('profile repository', () => {
@@ -88,7 +95,7 @@ describe('profile repository: upgrading a version 1 (Phase 1–4) profile', () =
     customAnswers: [],
   };
 
-  it('loads, migrates, saves as version 2, and loads again with every value kept', async () => {
+  it('loads, migrates, saves as version 3, and loads again with every value kept', async () => {
     const store = createIndexedDbStore<ExtensionStorageSchema>({
       databaseName: 'upgrade-test',
       factory: new IDBFactory(),
@@ -110,22 +117,62 @@ describe('profile repository: upgrading a version 1 (Phase 1–4) profile', () =
 
     const loaded = await repository.load();
     expect(loaded).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       identity: { firstName: 'Jane', lastName: 'Doe' },
-      education: { institution: 'Example University', degree: 'MSc' },
+      education: [
+        { institution: 'Example University', degree: 'MSc' },
+        { institution: 'First College', degree: 'BSc' },
+      ],
+      workExperience: [],
+      certifications: [],
       preferences: { workMode: 'hybrid', employmentType: 'contract', openToRelocation: true },
-      legacy: {
-        education: [{ institution: 'First College', degree: 'BSc' }],
-        employmentTypes: ['full-time'],
-      },
+      legacy: { employmentTypes: ['full-time'] },
     });
     // Loading alone never writes.
     expect(await store.get('profile')).toEqual(phase4Profile);
 
     await repository.save(loaded);
-    expect((await store.get('profile'))?.schemaVersion).toBe(2);
+    expect((await store.get('profile'))?.schemaVersion).toBe(3);
     expect(await repository.load()).toEqual(loaded);
     // Saved mappings are a separate record and are untouched by the upgrade.
     expect((await store.get('savedMappings'))?.mappings).toHaveLength(1);
+  });
+});
+
+describe('profile repository: upgrading a version 2 (Phase 5–9) profile', () => {
+  const phase9Profile = {
+    schemaVersion: 2,
+    identity: { firstName: 'Jane' },
+    contact: {},
+    location: {},
+    education: { institution: 'University of Example', fieldOfStudy: 'Physics' },
+    experience: { currentCompany: 'Example Co', currentTitle: 'Staff Engineer', workHistory: [] },
+    links: {},
+    preferences: {},
+    authorization: {},
+    documents: { resumes: [], coverLetters: [] },
+    customAnswers: [],
+  };
+
+  it('loads as version 3 with the primary education record first; saving persists it', async () => {
+    const store = createIndexedDbStore<ExtensionStorageSchema>({
+      databaseName: 'upgrade-v2-test',
+      factory: new IDBFactory(),
+    });
+    await store.set('profile', phase9Profile as unknown as Profile);
+    const repository = createProfileRepository(store);
+    const loaded = await repository.load();
+    expect(loaded).toMatchObject({
+      schemaVersion: 3,
+      education: [{ institution: 'University of Example', fieldOfStudy: 'Physics' }],
+      experience: { currentCompany: 'Example Co', currentTitle: 'Staff Engineer' },
+      workExperience: [],
+      certifications: [],
+    });
+    expect(await store.get('profile')).toEqual(phase9Profile);
+    await repository.save(loaded);
+    expect(await repository.load()).toEqual(loaded);
+    await repository.clear();
+    expect(await repository.load()).toEqual(createEmptyProfile());
   });
 });

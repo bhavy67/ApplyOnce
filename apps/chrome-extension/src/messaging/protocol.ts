@@ -3,6 +3,7 @@ import type {
   FillInstruction,
   FillResult,
   FormField,
+  ProfileRecordCollection,
   SavedMapping,
 } from '@applyonce/core';
 import type { Profile } from '@applyonce/profile';
@@ -53,6 +54,9 @@ export const MessageType = {
 
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 
+/** How many records each collection has. Counts only: never record values. */
+export type ProfileRecordCounts = Readonly<Record<ProfileRecordCollection, number>>;
+
 export interface ProfileStatus {
   hasData: boolean;
   valueCount: number;
@@ -100,7 +104,8 @@ export interface ResponseDataByType {
   [MessageType.ScanPage]: PageScan;
   [MessageType.GetProfile]: Profile;
   [MessageType.GetProfileStatus]: ProfileStatus;
-  [MessageType.MapFields]: { mappings: ReviewedMapping[] };
+  /** `records` lets the popup offer Teach Once targets for existing records only. */
+  [MessageType.MapFields]: { mappings: ReviewedMapping[]; records: ProfileRecordCounts };
   [MessageType.FillPage]: { results: FillResult[] };
   [MessageType.FillFields]: { results: FillResult[] };
   /** The field's mapping after teaching, ready to replace the one under review. */

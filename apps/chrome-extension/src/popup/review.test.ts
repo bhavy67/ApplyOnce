@@ -1,4 +1,4 @@
-import { PROFILE_FIELD_KEYS, PROFILE_FIELDS } from '@applyonce/core';
+import { PROFILE_FIELD_KEYS, PROFILE_FIELDS, type FieldType } from '@applyonce/core';
 import { describe, expect, it } from 'vitest';
 import type { ReviewedMapping } from '../messaging/protocol';
 import {
@@ -143,8 +143,16 @@ describe('teaching', () => {
     ).toBe(true);
   });
 
+  const NONE = { education: 0, workExperience: 0, certifications: 0 };
+  const keys = (type: FieldType, records = NONE) =>
+    teachOptions(type, records).flatMap((group) => group.options.map((o) => o.key));
+  const option = (type: FieldType, key: string, records = NONE) =>
+    teachOptions(type, records)
+      .flatMap((group) => group.options.map((o) => ({ ...o, group: group.label })))
+      .find((o) => o.key === key);
+
   it('offers the Phase 5 fields through the same definitions', () => {
-    expect(teachOptions('text').map((o) => o.key)).toEqual(
+    expect(keys('text')).toEqual(
       expect.arrayContaining([
         'website_url',
         'current_title',
@@ -156,30 +164,92 @@ describe('teaching', () => {
         'employment_type',
       ]),
     );
-    expect(teachOptions('select').map((o) => o.key)).toEqual(
+    expect(keys('select')).toEqual(
       expect.arrayContaining(['work_mode', 'employment_type', 'highest_degree', 'graduation_year']),
     );
-    expect(teachOptions('number').map((o) => o.key)).toEqual([
+    expect(keys('number')).toEqual([
       'postal_code',
       'experience_years',
+      'education[0].startYear',
       'graduation_year',
     ]);
-    expect(teachOptions('select').find((o) => o.key === 'employment_type')?.label).toBe(
-      'Employment type',
-    );
+    expect(option('select', 'employment_type')?.label).toBe('Employment type');
   });
 
   it('builds the selector from the canonical profile field definitions for this field type', () => {
-    const textOptions = teachOptions('text').map((o) => o.key);
-    expect(textOptions).toEqual(
-      PROFILE_FIELD_KEYS.filter((k) => PROFILE_FIELDS[k].fieldTypes.includes('text')),
+    const scalars = keys('text').filter((k) => !k.includes('['));
+    expect([...scalars].sort()).toEqual(
+      PROFILE_FIELD_KEYS.filter((k) => PROFILE_FIELDS[k].fieldTypes.includes('text')).sort(),
     );
-    expect(textOptions).toContain('city');
-    expect(teachOptions('checkbox').map((o) => o.key)).toEqual([
+    expect(scalars).toContain('city');
+    expect(keys('checkbox')).toEqual(['willing_to_relocate', 'requires_sponsorship']);
+    expect(option('text', 'postal_code')).toMatchObject({
+      label: 'Postal code',
+      group: 'Location',
+    });
+  });
+
+  it('Phase 10: offers a group per existing record, with readable labels', () => {
+    const records = { education: 2, workExperience: 2, certifications: 1 };
+    const groups = teachOptions('text', records).map((g) => g.label);
+    expect(groups).toEqual([
+      'Personal information',
+      'Location',
+      'Professional',
+      'Employment',
+      'Work experience 1',
+      'Work experience 2',
+      'Job preferences',
+      'Education 1 (primary)',
+      'Education 2',
+      'Certification 1',
+      'Authorization',
+    ]);
+    expect(option('text', 'institution', records)).toMatchObject({
+      label: 'Institution',
+      group: 'Education 1 (primary)',
+    });
+    expect(option('text', 'education[1].institution', records)).toMatchObject({
+      label: 'Education 2 → Institution',
+      group: 'Education 2',
+    });
+    expect(option('text', 'workExperience[1].company', records)?.label).toBe(
+      'Work experience 2 → Company',
+    );
+    expect(option('text', 'certifications[0].name', records)?.label).toBe('Certification 1 → Name');
+    // Sections in editor order: Work experience comes before Job preferences.
+    expect(keys('checkbox', records)).toEqual([
+      'workExperience[0].current',
+      'workExperience[1].current',
       'willing_to_relocate',
       'requires_sponsorship',
     ]);
-    expect(teachOptions('text').find((o) => o.key === 'postal_code')?.label).toBe('Postal code');
+    expect(keys('textarea', records)).toEqual([
+      'address',
+      'workExperience[0].description',
+      'workExperience[1].description',
+    ]);
+  });
+
+  it('Phase 10: offers only records the profile has, but always the primary education', () => {
+    expect(teachOptions('text', NONE).map((g) => g.label)).toContain('Education 1 (primary)');
+    expect(
+      keys('text').some((k) => k.startsWith('workExperience') || k.startsWith('certifications')),
+    ).toBe(false);
+    expect(keys('text').filter((k) => k.startsWith('education['))).toEqual([
+      'education[0].startYear',
+    ]);
+    expect(keys('text', { ...NONE, education: 3 })).toContain('education[2].institution');
+    expect(keys('text', { ...NONE, education: 3 })).not.toContain('education[3].institution');
+  });
+
+  it('Phase 10: describes record targets by label and path', () => {
+    expect(
+      profileFieldDescription(mapping({ fieldId: 'x', profileField: 'education[1].institution' })),
+    ).toBe('Education 2 → Institution (education[1].institution)');
+    expect(profileFieldDescription(mapping({ fieldId: 'y', profileField: 'institution' }))).toBe(
+      'Institution (education[0].institution)',
+    );
   });
 });
 

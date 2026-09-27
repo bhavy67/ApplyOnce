@@ -1,5 +1,6 @@
 import {
-  PROFILE_FIELDS,
+  PROFILE_RECORD_COLLECTIONS,
+  resolveProfileTarget,
   type FillInstruction,
   type FillResult,
   type FormField,
@@ -10,12 +11,7 @@ import {
   mapFields,
   type SavedMappingLookup,
 } from '@applyonce/field-mapper';
-import {
-  countProfileValues,
-  getProfileValue,
-  isProfileFieldKey,
-  type Profile,
-} from '@applyonce/profile';
+import { countProfileValues, getProfileValue, recordCount, type Profile } from '@applyonce/profile';
 import { BUILD_ID } from '../build-info';
 import { logFailure } from '../log-failure';
 import {
@@ -25,6 +21,7 @@ import {
   parseMessage,
   type FieldApproval,
   type MessageResult,
+  type ProfileRecordCounts,
   type ReviewedMapping,
 } from '../messaging/protocol';
 import type { ProfileRepository, SavedMappingRepository } from '../storage';
@@ -120,8 +117,13 @@ export function createServiceWorkerMessageHandler({
           return ok({ hasData: valueCount > 0, valueCount });
         }
 
-        case MessageType.MapFields:
-          return ok({ mappings: reviewMappings(message.payload.fields, await loadContext()) });
+        case MessageType.MapFields: {
+          const context = await loadContext();
+          return ok({
+            mappings: reviewMappings(message.payload.fields, context),
+            records: recordCounts(context.profile),
+          });
+        }
 
         case MessageType.FillPage: {
           const { tabId, approvals } = message.payload;
@@ -179,6 +181,13 @@ const MESSAGE_TYPES_FOR_WORKER: ReadonlySet<string> = new Set([
   MessageType.GetRuntimeInfo,
   ...MAPPING_MESSAGES,
 ]);
+
+/** Record counts for the Teach Once selector; never record values. */
+function recordCounts(profile: Profile): ProfileRecordCounts {
+  return Object.fromEntries(
+    PROFILE_RECORD_COLLECTIONS.map((collection) => [collection, recordCount(profile, collection)]),
+  ) as ProfileRecordCounts;
+}
 
 /** Mappings for review: saved mappings first, then the matcher; values reduced to hasValue. */
 function reviewMappings(
@@ -244,19 +253,20 @@ function prepareInstruction(
   { profile, lookup }: MappingContext,
 ): FillInstruction | FillResult {
   const fieldId = field.id;
-  if (!isProfileFieldKey(profileField)) {
+  const target = resolveProfileTarget(profileField);
+  if (!target) {
     return { fieldId, status: 'failed', message: 'Invalid mapping.' };
   }
-  if (!PROFILE_FIELDS[profileField].fieldTypes.includes(field.type)) {
+  if (!target.fieldTypes.includes(field.type)) {
     return { fieldId, status: 'unsupported', message: 'This field cannot hold that value.' };
   }
   const [mapping] = mapFields([field], matcher, lookup).mappings;
   const approvable =
     mapping?.status === 'mapped' || mapping?.status === 'review' || mapping?.status === 'taught';
-  if (!approvable || mapping.profileField !== profileField) {
+  if (!approvable || mapping.profileField !== target.target) {
     return { fieldId, status: 'failed', message: 'This field does not match that profile field.' };
   }
-  const value = getProfileValue(profile, profileField);
+  const value = getProfileValue(profile, target.target);
   if (value === undefined) {
     return { fieldId, status: 'skipped', message: 'Your profile has no value for this field.' };
   }

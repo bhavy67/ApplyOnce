@@ -250,6 +250,72 @@ describe('saved (taught) mappings', () => {
     expect(mapFields([f], matcher, new Map()).mappings[0]?.status).toBe('unknown');
   });
 
+  it.each(['institution', 'field_of_study', 'graduation_year', 'current_company', 'current_title'])(
+    'Phase 10: an older saved mapping to %s still resolves to the same key',
+    (profileField) => {
+      const f = field(profileField === 'graduation_year' ? 'number' : 'text', {
+        label: 'Custom question 9',
+      });
+      expect(
+        mapFields([f], matcher, savedFor(f, profileField as SavedMapping['profileField']))
+          .mappings[0],
+      ).toMatchObject({
+        status: 'taught',
+        profileField,
+      });
+    },
+  );
+
+  it.each([
+    'education[1].institution',
+    'education[2].fieldOfStudy',
+    'workExperience[0].company',
+    'workExperience[1].company',
+    'certifications[0].name',
+  ] as const)('Phase 10: a mapping taught to the record field %s resolves to it', (target) => {
+    const f = field('text', { label: 'Previous school or employer' });
+    expect(mapFields([f], matcher, savedFor(f, target)).mappings[0]).toMatchObject({
+      status: 'taught',
+      source: 'taught',
+      profileField: target,
+    });
+  });
+
+  it('Phase 10: a record target for the primary record resolves to the scalar key', () => {
+    const f = field('text', { label: 'Alma mater' });
+    expect(
+      mapFields([f], matcher, savedFor(f, 'education[0].institution')).mappings[0],
+    ).toMatchObject({
+      status: 'taught',
+      profileField: 'institution',
+    });
+  });
+
+  it.each(['education[1].gpa', 'education.institution', '__proto__', 'workExperience[99].company'])(
+    'Phase 10: ignores a saved mapping with the invalid target %j',
+    (target) => {
+      const f = field('text', { label: 'Alma mater' });
+      const mapping = mapFields([f], matcher, savedFor(f, target as SavedMapping['profileField']))
+        .mappings[0];
+      expect(mapping?.source).toBe('automatic');
+    },
+  );
+
+  it('Phase 10: a record target the field type cannot hold is not applied', () => {
+    const f = field('number', { label: 'Previous employer' });
+    expect(
+      mapFields([f], matcher, savedFor(f, 'workExperience[1].company')).mappings[0]?.source,
+    ).toBe('automatic');
+  });
+
+  it('Phase 10: automatic mapping only ever targets scalar keys (the primary record)', () => {
+    const labels = ['University', 'Company', 'Previous employer', 'Certification', 'Degree'];
+    for (const label of labels) {
+      const profileField = mapOne(field('text', { label }))?.profileField;
+      expect(profileField === undefined || !profileField.includes('[')).toBe(true);
+    }
+  });
+
   it('still reports hidden fields as unsupported, with the taught source', () => {
     const f = { ...preferred(), visible: false };
     expect(mapFields([f], matcher, savedFor(f, 'city')).mappings[0]).toMatchObject({

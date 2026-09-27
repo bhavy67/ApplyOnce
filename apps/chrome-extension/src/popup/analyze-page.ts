@@ -5,6 +5,7 @@ import {
   MessageType,
   type FieldApproval,
   type PageScan,
+  type ProfileRecordCounts,
   type ReviewedMapping,
 } from '../messaging/protocol';
 import { BUILD_ID } from '../build-info';
@@ -29,6 +30,7 @@ export type AnalysisResult =
       site?: string;
       scan: PageScan;
       mappings: ReviewedMapping[];
+      records: ProfileRecordCounts;
     }
   | { ok: false; reason: AnalysisFailure };
 
@@ -100,6 +102,7 @@ export async function analyzeActiveTab(): Promise<AnalysisResult> {
     ...(site ? { site } : {}),
     scan,
     mappings: mapped.data.mappings,
+    records: mapped.data.records,
   };
 }
 

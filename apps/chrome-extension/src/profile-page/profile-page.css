@@ -85,6 +85,7 @@ body {
 }
 
 .field input,
+.field textarea,
 .field select {
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -247,4 +248,48 @@ dialog h2 {
 .legacy ul {
   margin: 0;
   padding-left: 20px;
+}
+
+.record-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.record {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.record-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.record-header h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.record-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  align-self: end;
+}
+
+.field textarea {
+  font: inherit;
+  resize: vertical;
 }
