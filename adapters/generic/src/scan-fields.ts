@@ -18,6 +18,7 @@ import {
   precedingText,
   wrapperLabelText,
 } from './field-text';
+import { markRepeatedSections } from './repeated-sections';
 import { isVisible } from './visibility';
 
 export type FormControl = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
@@ -156,6 +157,7 @@ export function scanControls(root: ParentNode, options: ScanOptions = {}): Scann
     scanned.push({ field, controls: [control] });
   });
 
+  markRepeatedSections(scanned);
   return options.postProcess ? options.postProcess(scanned) : scanned;
 
   function fieldId(element: HTMLElement, index: number): string {

@@ -100,3 +100,48 @@ describe('Phase 8 metadata in messages', () => {
     ).toEqual({ ok: false, error: 'malformed-message' });
   });
 });
+
+describe('Phase 11 record positions in messages', () => {
+  const base = {
+    id: 'id:i2',
+    type: 'text',
+    htmlType: 'text',
+    required: false,
+    visible: true,
+    disabled: false,
+    signals: { label: 'Institution' },
+  };
+
+  it('accepts a record position on fields and fill instructions', () => {
+    const record = { collection: 'education', index: 1 };
+    expect(
+      parseMessage({ type: MessageType.MapFields, payload: { fields: [{ ...base, record }] } }).ok,
+    ).toBe(true);
+    const instruction = {
+      fieldId: 'id:i2',
+      value: 'University B',
+      expected: { type: 'text', label: 'Institution', record },
+    };
+    expect(
+      parseMessage({ type: MessageType.FillFields, payload: { instructions: [instruction] } }).ok,
+    ).toBe(true);
+  });
+
+  it.each([
+    { collection: 'jobs', index: 0 },
+    { collection: 'education', index: -1 },
+    { collection: 'education', index: 20 },
+    { collection: 'education', index: 1.5 },
+    { collection: 'education' },
+    { index: 0 },
+    'education[1]',
+  ])('rejects the record %j', (record) => {
+    expect(
+      parseMessage({ type: MessageType.MapFields, payload: { fields: [{ ...base, record }] } }),
+    ).toEqual({ ok: false, error: 'malformed-message' });
+    const instruction = { fieldId: 'x', value: 'v', expected: { type: 'text', record } };
+    expect(
+      parseMessage({ type: MessageType.FillFields, payload: { instructions: [instruction] } }),
+    ).toEqual({ ok: false, error: 'malformed-message' });
+  });
+});

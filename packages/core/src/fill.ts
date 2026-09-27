@@ -1,4 +1,4 @@
-import type { FieldSignals } from './form-field';
+import type { FieldSignals, FormFieldRecord } from './form-field';
 import type { FieldType } from './field-type';
 
 /** A single profile value, as it is sent to the page for filling. */
@@ -6,12 +6,16 @@ export type FillValue = string | number | boolean;
 
 /**
  * One approved field/value pair. `expected` is the field's metadata at analysis time,
- * used to detect that the page changed and the id now points at a different field.
+ * used to detect that the page changed and the id now points at a different field (or,
+ * in a repeated section, at a field of a different record).
  */
 export interface FillInstruction {
   fieldId: string;
   value: FillValue;
-  expected: { type: FieldType } & Pick<FieldSignals, 'name' | 'htmlId' | 'label'>;
+  expected: { type: FieldType; record?: FormFieldRecord } & Pick<
+    FieldSignals,
+    'name' | 'htmlId' | 'label'
+  >;
 }
 
 /**

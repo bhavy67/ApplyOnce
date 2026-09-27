@@ -14,6 +14,8 @@ export type MatchReason =
   | 'nearby-text'
   | 'site-rule'
   | 'user-mapping'
+  /** The field's position in a repeated application section chose the profile record. */
+  | 'repeated-section'
   /** Another profile field also matched strongly, so confidence was lowered. */
   | 'conflict';
 

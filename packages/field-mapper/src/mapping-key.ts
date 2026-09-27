@@ -20,12 +20,15 @@ const KEY_VERSION = 'v1';
  *   site-specific while visible questions are what repeats across sites.
  * - No URL or hostname: a taught mapping applies wherever the same question appears.
  *
- * Returns undefined when the field has none of these, so it cannot be taught.
+ * Returns undefined when the field has none of these, so it cannot be taught. Fields in a
+ * repeated record section have no key either: their record comes from their position, and
+ * a key shared by every block ("Institution") would carry a mapping across records.
  */
 export function createMappingKeyParts(
   field: FormField,
   normalizeQuestionText?: (text: string) => string,
 ): MappingKeyParts | undefined {
+  if (field.record) return undefined;
   const signature = createFieldSignature(field, normalizeQuestionText);
   const ownLabel = signature.label ?? signature.ariaLabel;
   const question = ownLabel ?? signature.placeholder ?? signature.nearbyText;

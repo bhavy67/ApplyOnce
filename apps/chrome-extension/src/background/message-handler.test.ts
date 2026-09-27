@@ -907,3 +907,198 @@ describe('Phase 10: repeatable records through the service worker', () => {
     });
   });
 });
+
+describe('Phase 11: repeated application sections', () => {
+  const profile: Profile = {
+    ...sampleProfile,
+    experience: { currentCompany: 'Current Co', currentTitle: 'Staff Engineer' },
+    education: [
+      { institution: 'University A', degree: 'BSc', fieldOfStudy: 'Physics', graduationYear: 2014 },
+      { institution: 'University B', fieldOfStudy: 'Computer Science' },
+    ],
+    workExperience: [
+      { company: 'Company A', title: 'Title A', current: true },
+      {
+        company: 'Company B',
+        title: 'Title B',
+        location: 'Remote',
+        startDate: '2018-01',
+        endDate: '2020-12',
+        description: 'Built things.',
+      },
+    ],
+    certifications: [
+      {
+        name: 'Certification A',
+        issuer: 'Issuer A',
+        issueYear: 2020,
+        credentialUrl: 'https://cert.example.com/a',
+      },
+    ],
+  };
+  const inRecord = (
+    id: string,
+    label: string,
+    collection: 'education' | 'workExperience' | 'certifications',
+    index: number,
+    type: FieldType = 'text',
+  ): FormField => ({
+    ...field(id, type, { htmlId: id.slice(3), label }),
+    record: { collection, index },
+  });
+  const FIELDS3 = {
+    inst1: inRecord('id:i1', 'Institution', 'education', 0),
+    inst2: inRecord('id:i2', 'Institution', 'education', 1),
+    deg2: inRecord('id:d2', 'Degree', 'education', 1),
+    fos2: inRecord('id:f2', 'Field of Study', 'education', 1),
+    grad2: inRecord('id:g2', 'Graduation Year', 'education', 1, 'number'),
+    inst3: inRecord('id:i3', 'Institution', 'education', 2),
+    comp2: inRecord('id:c2', 'Company', 'workExperience', 1),
+    cur1: inRecord('id:cur1', 'I currently work here', 'workExperience', 0, 'checkbox'),
+    certUrl1: inRecord('id:u1', 'Credential URL', 'certifications', 0),
+  };
+
+  async function map(handle: Awaited<ReturnType<typeof setup>>['handle'], fields: FormField[]) {
+    const response = await handle(
+      { type: MessageType.MapFields, payload: { fields } },
+      EXTENSION_PAGE,
+    );
+    return (response as { data: { mappings: ReviewedMapping[] } }).data.mappings;
+  }
+
+  it('maps each record field to its own record; only the primary education is automatic', async () => {
+    const { handle } = await setup(profile);
+    const mappings = await map(handle, Object.values(FIELDS3));
+    expect(mappings.map((m) => [m.profileField, m.status, m.hasValue])).toEqual([
+      ['institution', 'mapped', true],
+      ['education[1].institution', 'review', true],
+      ['education[1].degree', 'review', false],
+      ['education[1].fieldOfStudy', 'review', true],
+      ['education[1].graduationYear', 'review', false],
+      ['education[2].institution', 'review', false],
+      ['workExperience[1].company', 'review', true],
+      ['workExperience[0].current', 'review', true],
+      ['certifications[0].credentialUrl', 'review', true],
+    ]);
+    expect(mappings.every((m) => m.mappingKey === undefined)).toBe(true);
+  });
+
+  it('fills approved record fields with exactly their values, tied to their record', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile, fillInTab);
+    const approvals = [
+      { field: FIELDS3.inst1, profileField: 'institution' },
+      { field: FIELDS3.inst2, profileField: 'education[1].institution' },
+      { field: FIELDS3.fos2, profileField: 'education[1].fieldOfStudy' },
+      { field: FIELDS3.comp2, profileField: 'workExperience[1].company' },
+      { field: FIELDS3.cur1, profileField: 'workExperience[0].current' },
+      { field: FIELDS3.certUrl1, profileField: 'certifications[0].credentialUrl' },
+    ];
+    await handle({ type: MessageType.FillPage, payload: { tabId: 4, approvals } }, EXTENSION_PAGE);
+    expect(calls[0]?.instructions.map((i) => [i.fieldId, i.value, i.expected.record])).toEqual([
+      ['id:i1', 'University A', { collection: 'education', index: 0 }],
+      ['id:i2', 'University B', { collection: 'education', index: 1 }],
+      ['id:f2', 'Computer Science', { collection: 'education', index: 1 }],
+      ['id:c2', 'Company B', { collection: 'workExperience', index: 1 }],
+      ['id:cur1', true, { collection: 'workExperience', index: 0 }],
+      ['id:u1', 'https://cert.example.com/a', { collection: 'certifications', index: 0 }],
+    ]);
+  });
+
+  it('never fills a missing record or a blank field of a partial record', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile, fillInTab);
+    const response = await handle(
+      {
+        type: MessageType.FillPage,
+        payload: {
+          tabId: 4,
+          approvals: [
+            { field: FIELDS3.inst3, profileField: 'education[2].institution' },
+            { field: FIELDS3.deg2, profileField: 'education[1].degree' },
+            { field: FIELDS3.grad2, profileField: 'education[1].graduationYear' },
+          ],
+        },
+      },
+      EXTENSION_PAGE,
+    );
+    expect(response).toMatchObject({
+      data: { results: [{ status: 'skipped' }, { status: 'skipped' }, { status: 'skipped' }] },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses approvals that do not match the field’s own record', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile, fillInTab);
+    const response = await handle(
+      {
+        type: MessageType.FillPage,
+        payload: {
+          tabId: 4,
+          approvals: [
+            { field: FIELDS3.inst2, profileField: 'institution' },
+            { field: FIELDS3.inst2, profileField: 'education[0].institution' },
+            { field: FIELDS3.comp2, profileField: 'current_company' },
+            { field: FIELDS3.comp2, profileField: 'workExperience[0].company' },
+          ],
+        },
+      },
+      EXTENSION_PAGE,
+    );
+    expect(response).toMatchObject({
+      data: { results: Array.from({ length: 4 }, () => ({ status: 'failed' })) },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('resolves positions: after reordering the profile, the same field gets the new record', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const reordered = {
+      ...profile,
+      education: [profile.education[1] ?? {}, profile.education[0] ?? {}],
+    };
+    const { handle } = await setup(reordered, fillInTab);
+    await handle(
+      {
+        type: MessageType.FillPage,
+        payload: {
+          tabId: 4,
+          approvals: [{ field: FIELDS3.inst2, profileField: 'education[1].institution' }],
+        },
+      },
+      EXTENSION_PAGE,
+    );
+    expect(calls[0]?.instructions.map((i) => i.value)).toEqual(['University A']);
+  });
+
+  it('cannot save a Teach Once mapping for a field in a repeated section', async () => {
+    const { handle } = await setup(profile);
+    expect(
+      await handle(
+        {
+          type: MessageType.SaveMapping,
+          payload: { field: FIELDS3.inst2, profileField: 'education[1].institution' },
+        },
+        EXTENSION_PAGE,
+      ),
+    ).toEqual({ ok: false, error: 'invalid-mapping' });
+  });
+
+  it('returns no record values while mapping', async () => {
+    const { handle } = await setup(profile);
+    const response = await handle(
+      { type: MessageType.MapFields, payload: { fields: Object.values(FIELDS3) } },
+      EXTENSION_PAGE,
+    );
+    for (const value of [
+      'University A',
+      'University B',
+      'Company B',
+      'Certification A',
+      'cert.example.com',
+    ]) {
+      expect(JSON.stringify(response)).not.toContain(value);
+    }
+  });
+});

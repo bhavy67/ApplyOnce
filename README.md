@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 10 — Repeatable profile records: complete.**
+**Phase 11 — Repeatable application sections: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -36,8 +36,10 @@ filling. It never submits a form for you. The full product specification is in
   confirmed before success. See [Search fields](#search-fields-workday-autocomplete).
 - Phase 10: the profile holds several education entries, work experience entries, and
   certifications, edited on the profile page and targetable with Teach Once. See
-  [Repeatable records](#repeatable-records). **Phase 10 stores repeatable profile data. It
-  does not yet automatically fill repeated application sections.**
+  [Repeatable records](#repeatable-records).
+- Phase 11: repeated application sections ("Education 1/2/3", "Work Experience 1/2",
+  "Certification 1/2") are recognised, and each block's fields map to the profile record at
+  the same position. See [Repeated application sections](#repeated-application-sections).
 
 Nothing is ever submitted. Greenhouse gets dedicated support in a later phase; until then
 it is handled by the generic adapter.
@@ -213,9 +215,48 @@ supported form field types, and whether Teach Once may target it.
   changes the profile.
 - **Privacy.** Records stay in the extension's IndexedDB. Only the approved value for each
   approved field reaches the content script; no record lists, counts, or other values do.
-- **Not implemented yet:** filling repeated application sections (e.g. Workday's education
-  and work-experience blocks), choosing which record fits which section, and clicking "Add
-  Education" / "Add Work Experience". Repeated questions on a page stay unsupported.
+- **Repeated application sections** are filled from these records by position (Phase 11,
+  below).
+
+### Repeated application sections
+
+A form that repeats a block per record (several education, work-experience, or
+certification blocks) is recognised when Analyze scans it, on generic pages and Workday:
+
+- **Detection.** A field's section is its nearest ancestor with a heading: a fieldset
+  legend, an `aria-labelledby` / `aria-label`, or a heading element as its first child.
+  The heading must name a record type exactly, optionally with a number ("Education 2",
+  "Work Experience", "Licenses & Certifications", …). Only a type with **two or more** such
+  blocks is a repeated section; a section containing the blocks is a wrapper. Field order or
+  repeated labels alone are never used.
+- **Record position.** Blocks are numbered in document order. Numbered headings must read
+  exactly 1, 2, 3, … in that order; otherwise (out of order, gaps, duplicates, mixed) the
+  whole structure is ambiguous and its fields are unsupported ("This question repeats on the
+  page"), never filled.
+- **Field → target.** Inside block _n_, a field's own question (label, else aria-label,
+  else placeholder) must exactly equal a known question for that record type, e.g.
+  "Institution" / "School or University" → `education[n-1].institution`, "Job Title" →
+  `workExperience[n-1].title`, "Credential URL" → `certifications[n-1].credentialUrl`.
+  An unknown question in a block (e.g. "GPA") is unsupported. These are the Phase 10
+  targets; nothing new is stored.
+- **Approval.** Education block 1 is the primary record: its fields use the usual keys
+  (`institution`, …) and are selected as before. Every other block field (Education 2+, all
+  work-experience and certification blocks) is shown for review, and filled only after you
+  tick it. Work-experience blocks never map to the current-employment fields.
+- **Missing and partial data.** A block without a matching profile record, or a record field
+  left blank, shows "No value in your profile" and is never filled. Extra profile records are
+  ignored. Positions follow the current profile order.
+- **Teach Once** is not offered inside repeated sections (the block's position decides the
+  record), and saved mappings are not applied there: a mapping taught for "Institution"
+  elsewhere cannot fill every block with the same value.
+- **Safety.** Each fill instruction carries its record position; if the page changed so the
+  field is now in another block (or no longer in a repeated section), it is not filled.
+- **Dynamic forms.** ApplyOnce never clicks "Add Education", "Add Another", or similar. If you
+  add a block, click **Analyze again**: sections are found on each scan (there is no
+  continuous page observation).
+- **Unsupported:** a single block (it maps as before), blocks without a record heading
+  (repeated fields inside one headed section stay unsupported on Workday), headings with other
+  wording, date pickers / `type="month"` inputs, and choosing records by content.
 
 ### Migration
 
@@ -553,9 +594,10 @@ Tenants on their own domains are recognised by the page containers.
 - **search fields** (`aria-autocomplete="list"`/`"both"`, e.g. "School or University")
   are one logical field of type _text_ and are filled as described in
   [Search fields](#search-fields-workday-autocomplete);
-- a question that appears more than once on the step (e.g. "Job Title" in two
-  work-experience blocks) is marked repeated and never filled: the profile holds only the
-  current job and one education record. A single section's fields fill normally.
+- headed record blocks ("Work Experience 1", "Work Experience 2", …) are repeated sections
+  (see [Repeated application sections](#repeated-application-sections)); any other question
+  that appears more than once on the step is marked repeated and never filled. A single
+  section's fields fill normally.
 
 **Supported controls:** text-like inputs, native selects, radio groups, single checkboxes,
 Workday dropdowns that expose ARIA listbox relationships (through the generic custom
@@ -655,11 +697,11 @@ single classic script, because MV3 content scripts cannot be ES modules.
 
 - Greenhouse extraction and filling (the adapter only recognises its URLs; the generic
   adapter handles those pages)
-- Workday multi-page navigation, repeated record sections, multi-select search fields
+- Workday multi-page navigation, repeated blocks without record headings, multi-select search fields
   (several pills), replacing an existing search selection, and verification against a real
   Workday application form (it requires sign-in)
-- Automatically filling repeated application sections from profile records (the records are
-  stored and can be targeted with Teach Once; see Repeatable records)
+- Filling repeated sections without approval, choosing records by content, creating blocks
+  ("Add Education"), and continuous DOM observation (see Repeated application sections)
 - Editing `legacy` values carried over by migration (they are read-only)
 - Scoping saved mappings to a site, similarity-based matching of saved mappings, and
   mapping edits from the management view (delete and re-teach instead)

@@ -217,6 +217,33 @@ describe('field detection', () => {
     expect(mappings[0]).toMatchObject({ unsupportedReason: 'repeated-question' });
   });
 
+  it('Phase 11: maps headed record sections to their records instead of marking them repeated', () => {
+    page(`
+      <div data-automation-id="workExperienceSection">
+        <div data-automation-id="workExperience-1"><h4>Work Experience 1</h4>${textField('jobTitle', 'Job Title')}${textField('company', 'Company')}</div>
+        <div data-automation-id="workExperience-2"><h4>Work Experience 2</h4>${textField('jobTitle', 'Job Title')}${textField('company', 'Company')}</div>
+      </div>
+      <div data-automation-id="educationSection">
+        <div data-automation-id="education-1"><h4>Education 1</h4>${textField('school', 'Field of Study')}</div>
+      </div>`);
+    const fields = scanWorkdayFields(document);
+    expect(fields.map((f) => [f.id, f.record, f.repeatedCount])).toEqual([
+      ['key:jobTitle', { collection: 'workExperience', index: 0 }, undefined],
+      ['key:company', { collection: 'workExperience', index: 0 }, undefined],
+      ['key:jobTitle~2', { collection: 'workExperience', index: 1 }, undefined],
+      ['key:company~2', { collection: 'workExperience', index: 1 }, undefined],
+      // A single education section stays a normal (primary) field.
+      ['key:school', undefined, undefined],
+    ]);
+    expect(mapFields(fields, matcher).mappings.map((m) => [m.status, m.profileField])).toEqual([
+      ['review', 'workExperience[0].title'],
+      ['review', 'workExperience[0].company'],
+      ['review', 'workExperience[1].title'],
+      ['review', 'workExperience[1].company'],
+      ['mapped', 'field_of_study'],
+    ]);
+  });
+
   it('detects radio groups and checkboxes; ignores file uploads, passwords, and buttons', () => {
     page(`
       <fieldset data-automation-id="formField-sponsor"><legend>Will you require visa sponsorship?</legend>

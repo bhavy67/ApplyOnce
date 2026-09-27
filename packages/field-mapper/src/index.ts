@@ -9,4 +9,10 @@ export {
   mappingKeyFromParts,
 } from './mapping-key';
 export type { FieldMatch, FieldMatcher } from './matcher';
+export {
+  classifySectionHeading,
+  matchRecordField,
+  RECORD_FIELD_ALIASES,
+  RECORD_SECTION_HEADINGS,
+} from './record-sections';
 export { compactText, normalizeQuestion, normalizeText, stripRequiredMarkers } from './normalize';

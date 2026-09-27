@@ -1,4 +1,5 @@
 import type { FieldType } from './field-type';
+import type { ProfileRecordCollection } from './profile-field';
 
 /**
  * A field discovered on a page, described only by its metadata.
@@ -38,11 +39,22 @@ export interface FormField {
    * cannot answer each of them, so such fields are never filled.
    */
   repeatedCount?: number;
+  /**
+   * Set when the field sits in one record of a repeated application section, e.g. the
+   * second of several "Education" blocks: the kind of record and its position (0-based)
+   * among those blocks on the page. Such fields map only to that record's fields.
+   */
+  record?: FormFieldRecord;
   signals: FieldSignals;
   /** The enclosing form, when the field belongs to one. Many pages have none. */
   form?: FormContext;
   /** Choices for select/radio fields. Which choice is selected is never captured. */
   options?: readonly FieldOption[];
+}
+
+export interface FormFieldRecord {
+  collection: ProfileRecordCollection;
+  index: number;
 }
 
 export interface CustomControl {

@@ -131,10 +131,19 @@ async function fillOne(
   }
 }
 
-/** Same kind of field, with the same name/id (or label, when it has neither). */
+/**
+ * Same kind of field, with the same name/id (or label, when it has neither), in the same
+ * record of a repeated section (so a re-ordered page never fills another record's field).
+ */
 function matchesExpected(field: FormField, expected: FillInstruction['expected']): boolean {
   const { name, htmlId, label } = field.signals;
   if (field.type !== expected.type || name !== expected.name || htmlId !== expected.htmlId) {
+    return false;
+  }
+  if (
+    field.record?.collection !== expected.record?.collection ||
+    field.record?.index !== expected.record?.index
+  ) {
     return false;
   }
   return name !== undefined || htmlId !== undefined || label === expected.label;

@@ -1,4 +1,7 @@
 import {
+  isProfileFieldKey,
+  MAX_PROFILE_RECORDS,
+  recordTarget,
   resolveProfileTarget,
   type ConfidenceResult,
   type FieldMapping,
@@ -11,6 +14,7 @@ import {
 import { createFieldSignature } from './field-signature';
 import { mappingKeyCandidates } from './mapping-key';
 import type { FieldMatcher } from './matcher';
+import { matchRecordField } from './record-sections';
 
 /** Saved mappings by key. */
 export type SavedMappingLookup = ReadonlyMap<string, SavedMapping>;
@@ -46,6 +50,7 @@ function mapField(
   matcher: FieldMatcher,
   savedMappings: SavedMappingLookup,
 ): FieldMapping {
+  if (field.record) return mapRecordField(field, field.record);
   const [mappingKey, ...legacyKeys] = mappingKeyCandidates(field);
   const base = { fieldId: field.id, ...(mappingKey ? { mappingKey } : {}) };
 
@@ -96,6 +101,55 @@ function usableSavedTarget(saved: SavedMapping, field: FormField): ProfileTarget
   const usable =
     saved.parts.fieldType === field.type && definition?.fieldTypes.includes(field.type) === true;
   return usable ? definition.target : undefined;
+}
+
+/** Primary-record fields in a repeated section fill as before; other records need approval. */
+const PRIMARY_RECORD_CONFIDENCE: ConfidenceResult = {
+  score: 95,
+  level: 'high',
+  reasons: ['label', 'repeated-section'],
+};
+const OTHER_RECORD_CONFIDENCE: ConfidenceResult = {
+  score: 80,
+  level: 'review',
+  reasons: ['label', 'repeated-section'],
+};
+
+/**
+ * A field inside one record of a repeated application section maps only to that record's
+ * field (e.g. the Institution of the second "Education" block → education[1].institution),
+ * chosen by its own question. It never gets a scalar key other than the primary record's,
+ * and never a saved mapping key: a mapping taught on one block must not apply to another.
+ *
+ * - The primary education record (block 1) keeps its scalar keys and high confidence, so it
+ *   is selected as before. Every other record target is "review": filled only after the
+ *   user ticks it.
+ * - A question that is not a known field of that record, or a position past the record
+ *   limit, is unsupported (repeated question): nothing is guessed.
+ */
+function mapRecordField(field: FormField, record: NonNullable<FormField['record']>): FieldMapping {
+  const base = { fieldId: field.id, source: 'automatic' as const };
+  const name =
+    record.index < MAX_PROFILE_RECORDS ? matchRecordField(field, record.collection) : undefined;
+  if (!name) {
+    return {
+      ...base,
+      status: 'unsupported',
+      unsupportedReason: 'repeated-question',
+      confidence: { score: 0, level: 'unknown', reasons: [] },
+    };
+  }
+  const target = recordTarget(record.collection, record.index, name);
+  const primary = isProfileFieldKey(target);
+  return withStatus(
+    {
+      ...base,
+      profileField: target,
+      confidence: primary ? PRIMARY_RECORD_CONFIDENCE : OTHER_RECORD_CONFIDENCE,
+    },
+    field,
+    primary ? 'mapped' : 'review',
+  );
 }
 
 function withStatus(

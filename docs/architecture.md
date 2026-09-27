@@ -188,6 +188,24 @@ filled only by a site adapter's filler, see Phase 9). Independently,
 the custom-dropdown engine never clicks a trigger or option whose whole name is a
 navigation or submission action (Next, Continue, Save and Continue, Submit, Apply, Back, …).
 
+**Repeated application sections (Phase 11).** `scanControls` ends with
+`markRepeatedSections` (`adapters/generic/repeated-sections.ts`), so generic pages and
+Workday share it. For each field it walks up (≤ 12 levels) to the nearest container whose
+heading (fieldset legend, aria-labelledby/aria-label, or first-child heading) classifies as
+a record type (`classifySectionHeading`, `field-mapper/record-sections.ts`). Containers that
+contain another of the same type are wrappers. With ≥ 2 record containers of a type,
+fields get `FormField.record = { collection, index }` (document order); inconsistent
+numbering sets `repeatedCount` instead (unsupported). A single container changes nothing.
+In the mapper, `field.record` short-circuits everything else: `matchRecordField` compares the
+field's own question with `RECORD_FIELD_ALIASES[collection]` (exact), the target is
+`recordTarget(collection, index, field)` (so education block 1 yields the scalar keys, status
+`mapped`, reason `repeated-section`), other targets are `review`; no match → `unsupported`
+(`repeated-question`). Record fields have no mapping key (`createMappingKeyParts` → undefined),
+so saved mappings never apply to them and Teach is not offered. `FillInstruction.expected`
+carries `record`; `fillFields` treats a changed record position as not found. Message
+validation accepts `record` only with a known collection and an index below
+`MAX_PROFILE_RECORDS`.
+
 **Search fields (Phase 9).** `fillFields` accepts a `fillCustom` hook: a site adapter's
 filler for custom controls, tried before the generic engine (returning `undefined` hands
 the field back). Without one, `search-input` stays unsupported, so generic pages are

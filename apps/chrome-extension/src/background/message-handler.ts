@@ -271,5 +271,10 @@ function prepareInstruction(
     return { fieldId, status: 'skipped', message: 'Your profile has no value for this field.' };
   }
   const { name, htmlId, label } = field.signals;
-  return { fieldId, value, expected: { type: field.type, name, htmlId, label } };
+  const record = field.record && { collection: field.record.collection, index: field.record.index };
+  return {
+    fieldId,
+    value,
+    expected: { type: field.type, name, htmlId, label, ...(record ? { record } : {}) },
+  };
 }

@@ -1,4 +1,10 @@
-import { isFieldType, type FillInstruction, type FormField } from '@applyonce/core';
+import {
+  isFieldType,
+  MAX_PROFILE_RECORDS,
+  PROFILE_RECORD_COLLECTIONS,
+  type FillInstruction,
+  type FormField,
+} from '@applyonce/core';
 
 /**
  * Structural checks for message payloads. Messages only come from this extension, but a
@@ -33,7 +39,7 @@ export function isBoundedArray(value: unknown): value is unknown[] {
 export function isFormField(value: unknown): value is FormField {
   if (!isRecord(value)) return false;
   const { id, type, htmlType, required, visible, disabled, readOnly, groupSize } = value;
-  const { signals, form, options, custom, repeatedCount } = value;
+  const { signals, form, options, custom, repeatedCount, record } = value;
   return (
     typeof id === 'string' &&
     typeof type === 'string' &&
@@ -46,6 +52,7 @@ export function isFormField(value: unknown): value is FormField {
     (groupSize === undefined || (Number.isInteger(groupSize) && (groupSize as number) > 0)) &&
     (repeatedCount === undefined ||
       (Number.isInteger(repeatedCount) && (repeatedCount as number) > 0)) &&
+    (record === undefined || isFieldRecord(record)) &&
     (custom === undefined ||
       (isRecord(custom) &&
         typeof custom.pattern === 'string' &&
@@ -71,7 +78,20 @@ export function isFillInstruction(value: unknown): value is FillInstruction {
     ['string', 'number', 'boolean'].includes(typeof fillValue) &&
     typeof expected.type === 'string' &&
     isFieldType(expected.type) &&
-    ['name', 'htmlId', 'label'].every((key) => isOptionalString(expected[key]))
+    ['name', 'htmlId', 'label'].every((key) => isOptionalString(expected[key])) &&
+    (expected.record === undefined || isFieldRecord(expected.record))
+  );
+}
+
+/** A record position: a known collection and an index within the record limit. */
+function isFieldRecord(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.collection === 'string' &&
+    (PROFILE_RECORD_COLLECTIONS as readonly string[]).includes(value.collection) &&
+    Number.isInteger(value.index) &&
+    (value.index as number) >= 0 &&
+    (value.index as number) < MAX_PROFILE_RECORDS
   );
 }
 
