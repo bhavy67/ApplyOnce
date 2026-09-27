@@ -1,5 +1,7 @@
+import type { AssignmentHandle } from '../storage/record-assignment-repository';
 import type {
   FieldMapping,
+  FieldType,
   FillInstruction,
   FillResult,
   FormField,
@@ -57,6 +59,12 @@ export const MessageType = {
   DeleteAssignment: 'applyonce/delete-assignment',
   /** The profile's records, labeled, to choose from when assigning. Extension pages only. */
   GetRecordChoices: 'applyonce/get-record-choices',
+  /** Saved record assignments, for the management view. Extension pages only. */
+  ListAssignments: 'applyonce/list-assignments',
+  /** Remove one saved record assignment (management view). Extension pages only. */
+  RemoveAssignment: 'applyonce/remove-assignment',
+  /** Remove every saved record assignment. Extension pages only. */
+  ClearAssignments: 'applyonce/clear-assignments',
 } as const;
 
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
@@ -86,6 +94,27 @@ export interface ReviewedMapping extends FieldMapping {
    * "Education 2 → Degree" (the stored target uses the record id, never shown).
    */
   targetLabel?: string;
+  /**
+   * Set for an assignment of identical copies (no unique identity): it is not saved and holds
+   * only for this review.
+   */
+  transient?: boolean;
+}
+
+/** A saved record assignment as the management view shows it: labels only. */
+export interface AssignmentView {
+  /** Identifies the entry for removal; never displayed. */
+  handle: AssignmentHandle;
+  site: string;
+  path: string;
+  question: string;
+  controlType: FieldType;
+  /** "Education 2 · Degree", from the record's current position. */
+  target: string;
+  /** False when the assigned record no longer exists. */
+  available: boolean;
+  /** "legacy": saved before field identities (Phase 13). */
+  kind: 'identity' | 'legacy';
 }
 
 /** One record to choose from when assigning, labeled for the extension UI. */
@@ -105,6 +134,8 @@ export type RecordChoicesByCollection = Readonly<
 export interface FieldApproval {
   field: FormField;
   profileField: string;
+  /** An unsaved record assignment (identical copies), re-checked by the service worker. */
+  transient?: boolean;
 }
 
 /** Request payload for each message type (undefined = no payload). */
@@ -125,6 +156,9 @@ export interface PayloadByType {
   [MessageType.SaveAssignment]: { page: string; field: FormField; target: string };
   [MessageType.DeleteAssignment]: { page: string; field: FormField };
   [MessageType.GetRecordChoices]: undefined;
+  [MessageType.ListAssignments]: undefined;
+  [MessageType.RemoveAssignment]: { handle: AssignmentHandle };
+  [MessageType.ClearAssignments]: undefined;
 }
 
 /** Response payload for each message type. */
@@ -147,6 +181,9 @@ export interface ResponseDataByType {
   [MessageType.SaveAssignment]: { mapping: ReviewedMapping };
   [MessageType.DeleteAssignment]: { mapping: ReviewedMapping };
   [MessageType.GetRecordChoices]: { records: RecordChoicesByCollection };
+  [MessageType.ListAssignments]: { assignments: AssignmentView[] };
+  [MessageType.RemoveAssignment]: { removed: boolean };
+  [MessageType.ClearAssignments]: { cleared: true };
 }
 
 export type Message<T extends MessageType = MessageType> = T extends MessageType
@@ -199,7 +236,11 @@ const PAYLOAD_VALIDATORS: Partial<Record<MessageType, (payload: unknown) => bool
     Number.isInteger(p.tabId) &&
     isBoundedArray(p.approvals) &&
     p.approvals.every(
-      (a) => isRecord(a) && isFormField(a.field) && typeof a.profileField === 'string',
+      (a) =>
+        isRecord(a) &&
+        isFormField(a.field) &&
+        typeof a.profileField === 'string' &&
+        (a.transient === undefined || typeof a.transient === 'boolean'),
     ) &&
     (p.page === undefined || isPageKey(p.page)),
   [MessageType.FillFields]: (p) =>
@@ -213,6 +254,14 @@ const PAYLOAD_VALIDATORS: Partial<Record<MessageType, (payload: unknown) => bool
   [MessageType.SaveAssignment]: (p) =>
     isRecord(p) && isPageKey(p.page) && isFormField(p.field) && typeof p.target === 'string',
   [MessageType.DeleteAssignment]: (p) => isRecord(p) && isPageKey(p.page) && isFormField(p.field),
+  [MessageType.RemoveAssignment]: (p) =>
+    isRecord(p) &&
+    isRecord(p.handle) &&
+    isPageKey(p.handle.page) &&
+    typeof p.handle.fieldId === 'string' &&
+    p.handle.fieldId.length <= 2000 &&
+    (p.handle.identityKey === undefined ||
+      (typeof p.handle.identityKey === 'string' && /^fp-[0-9a-f]{16}$/.test(p.handle.identityKey))),
 };
 
 const MESSAGE_TYPES: ReadonlySet<string> = new Set(Object.values(MessageType));

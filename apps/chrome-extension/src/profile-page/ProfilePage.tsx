@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ProfileRepository } from '../storage';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ProfileForm } from './ProfileForm';
+import { SavedAssignmentsSection } from './SavedAssignmentsSection';
 import { SavedMappingsSection } from './SavedMappingsSection';
 import { useProfileEditor } from './use-profile-editor';
 
@@ -84,6 +85,7 @@ export function ProfilePage({ repository }: { repository: ProfileRepository }) {
         }}
       />
       <SavedMappingsSection />
+      <SavedAssignmentsSection />
     </main>
   );
 }

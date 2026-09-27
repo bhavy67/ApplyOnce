@@ -1,4 +1,5 @@
 import {
+  isRecordIdTarget,
   PROFILE_RECORD_COLLECTION_DEFINITIONS,
   PROFILE_RECORD_COLLECTIONS,
   resolveProfileTarget,
@@ -33,6 +34,7 @@ import {
   parseMessage,
   type FieldApproval,
   type MessageResult,
+  type AssignmentView,
   type ProfileRecordCounts,
   type RecordChoicesByCollection,
   type ReviewedMapping,
@@ -81,6 +83,9 @@ const MAPPING_MESSAGES: ReadonlySet<string> = new Set([
   MessageType.ClearMappings,
   MessageType.SaveAssignment,
   MessageType.DeleteAssignment,
+  MessageType.ListAssignments,
+  MessageType.RemoveAssignment,
+  MessageType.ClearAssignments,
 ]);
 
 interface MappingContext {
@@ -169,14 +174,17 @@ export function createServiceWorkerMessageHandler({
         case MessageType.SaveAssignment: {
           const { page, field, target } = message.payload;
           const context = await loadContext();
-          const [mapping] = mapFields([field], matcher, context.lookup).mappings;
-          const definition = resolveProfileTarget(target);
-          const record = definition?.record;
-          const recordExists =
-            record?.recordId !== undefined &&
-            recordIndexById(context.profile, record.collection, record.recordId) >= 0;
-          if (!mapping || !isAssignableField(field, mapping) || !recordExists) {
-            return fail('invalid-mapping');
+          if (!isValidAssignment(field, target, context)) return fail('invalid-mapping');
+          // Identical copies (no unique identity) are never saved: the assignment lives only in
+          // this review, so it cannot follow the field somewhere else later.
+          if (field.identity?.unique !== true) {
+            const [reviewed] = reviewMappings(
+              [field],
+              context,
+              page,
+              new Map([[field.id, target]]),
+            );
+            return reviewed ? ok({ mapping: reviewed }) : fail('internal-error');
           }
           const saved = await recordAssignments.save({ page, field, target });
           if (!saved.ok) return fail('invalid-mapping');
@@ -187,13 +195,26 @@ export function createServiceWorkerMessageHandler({
 
         case MessageType.DeleteAssignment: {
           const { page, field } = message.payload;
-          await recordAssignments.delete(page, field.id);
+          await recordAssignments.deleteForField(page, field);
           const [reviewed] = reviewMappings([field], await loadContext(), page);
           return reviewed ? ok({ mapping: reviewed }) : fail('internal-error');
         }
 
         case MessageType.GetRecordChoices:
           return ok({ records: recordChoicesView(await repository.load()) });
+
+        case MessageType.ListAssignments: {
+          const assignments = await recordAssignments.list();
+          const profile = await repository.load();
+          return ok({ assignments: assignments.map((a) => assignmentView(a, profile)) });
+        }
+
+        case MessageType.RemoveAssignment:
+          return ok({ removed: await recordAssignments.remove(message.payload.handle) });
+
+        case MessageType.ClearAssignments:
+          await recordAssignments.clear();
+          return ok({ cleared: true });
 
         case MessageType.SaveMapping: {
           const { field, profileField, site } = message.payload;
@@ -270,20 +291,96 @@ function mapWithAssignments(
   fields: readonly FormField[],
   { profile, lookup, assignments }: MappingContext,
   page: string | undefined,
+  transient?: ReadonlyMap<string, string>,
 ): FieldMapping[] {
   const mappings = mapFields(fields, matcher, lookup).mappings;
   if (!page) return mappings;
   return applyRecordAssignments(fields, mappings, (field) => {
-    const assignment = assignments.find(
-      (a) => a.page === page && a.fieldId === field.id && isSameAssignedField(a.field, field),
-    );
-    if (!assignment) return undefined;
-    const record = resolveProfileTarget(assignment.target)?.record;
-    if (record?.recordId === undefined) return 'unavailable';
+    // An unsaved assignment is accepted only for a field without a unique identity.
+    const unsaved = field.identity?.unique === true ? undefined : transient?.get(field.id);
+    const target = unsaved ?? findAssignment(assignments, page, field)?.target;
+    if (!target) return undefined;
+    const record = resolveProfileTarget(target)?.record;
+    if (record?.recordId === undefined || !isRecordIdTarget(target)) return 'unavailable';
     return recordIndexById(profile, record.collection, record.recordId) >= 0
-      ? assignment.target
+      ? target
       : 'unavailable';
   });
+}
+
+/** Field ids taken from the page's own attributes (not positional ones like "index:3" or "~2"). */
+const ATTRIBUTE_FIELD_ID = /^(?:id|name|key):[^~]+$/;
+
+/**
+ * The saved assignment for this field on this page. Saved assignments match by the field's
+ * semantic identity, and only when that identity is unique on the page now (two fields with
+ * the same identity get neither). Assignments saved before identities existed (version 1)
+ * match only a uniquely identifiable field whose id comes from its own attributes.
+ */
+function findAssignment(
+  assignments: readonly RecordAssignment[],
+  page: string,
+  field: FormField,
+): RecordAssignment | undefined {
+  const { identity } = field;
+  if (identity?.unique !== true) return undefined;
+  const samePage = assignments.filter((a) => a.page === page);
+  return (
+    samePage.find(
+      (a) => a.identityKey === identity.key && isSameAssignedField(a.field, field, true),
+    ) ??
+    samePage.find(
+      (a) =>
+        a.identityKey === undefined &&
+        a.fieldId === field.id &&
+        ATTRIBUTE_FIELD_ID.test(field.id) &&
+        isSameAssignedField(a.field, field),
+    )
+  );
+}
+
+/** An assignment the user may make: a repeated field without record context, an existing record. */
+function isValidAssignment(field: FormField, target: string, context: MappingContext): boolean {
+  const [mapping] = mapFields([field], matcher, context.lookup).mappings;
+  const definition = resolveProfileTarget(target);
+  const record = definition?.record;
+  return (
+    mapping !== undefined &&
+    isAssignableField(field, mapping) &&
+    isRecordIdTarget(target) &&
+    definition?.fieldTypes.includes(field.type) === true &&
+    record?.recordId !== undefined &&
+    recordIndexById(context.profile, record.collection, record.recordId) >= 0
+  );
+}
+
+/** A stored assignment as the management view shows it: labels only, never ids or values. */
+function assignmentView(assignment: RecordAssignment, profile: Profile): AssignmentView {
+  const url = new URL(assignment.page);
+  const definition = resolveProfileTarget(assignment.target);
+  const record = definition?.record;
+  const index =
+    record?.recordId !== undefined
+      ? recordIndexById(profile, record.collection, record.recordId)
+      : -1;
+  const fieldLabel = definition?.label.split(' → ').at(-1) ?? '';
+  return {
+    handle: {
+      page: assignment.page,
+      fieldId: assignment.fieldId,
+      ...(assignment.identityKey ? { identityKey: assignment.identityKey } : {}),
+    },
+    site: url.hostname,
+    path: url.pathname,
+    question: assignment.field.label ?? 'Unlabeled field',
+    controlType: assignment.field.type,
+    target:
+      record && index >= 0
+        ? `${PROFILE_RECORD_COLLECTION_DEFINITIONS[record.collection].itemLabel} ${index + 1} · ${fieldLabel}`
+        : `${record ? PROFILE_RECORD_COLLECTION_DEFINITIONS[record.collection].itemLabel : 'Record'} · ${fieldLabel}`,
+    available: index >= 0,
+    kind: assignment.identityKey ? 'identity' : 'legacy',
+  };
 }
 
 /** "Education 2 → Degree" for a record id target, from the record's current position. */
@@ -310,12 +407,15 @@ function reviewMappings(
   fields: readonly FormField[],
   context: MappingContext,
   page?: string,
+  transient?: ReadonlyMap<string, string>,
 ): ReviewedMapping[] {
   const { profile } = context;
-  return mapWithAssignments(fields, context, page).map((mapping) => {
+  return mapWithAssignments(fields, context, page, transient).map((mapping, index) => {
     const targetLabel = assignedTargetLabel(profile, mapping);
+    const unsaved = mapping.source === 'assigned' && transient?.has(fields[index]?.id ?? '');
     return {
       ...mapping,
+      ...(unsaved ? { transient: true } : {}),
       hasValue:
         mapping.profileField !== undefined &&
         getProfileValue(profile, mapping.profileField) !== undefined,
@@ -372,7 +472,7 @@ async function fillApproved(
  * filled, and only from that profile field.
  */
 function prepareInstruction(
-  { field, profileField }: FieldApproval,
+  { field, profileField, transient }: FieldApproval,
   context: MappingContext,
   page: string | undefined,
 ): FillInstruction | FillResult {
@@ -385,7 +485,14 @@ function prepareInstruction(
   if (!target.fieldTypes.includes(field.type)) {
     return { fieldId, status: 'unsupported', message: 'This field cannot hold that value.' };
   }
-  const [mapping] = mapWithAssignments([field], context, page);
+  // An unsaved assignment (identical copies) travels with its approval and is re-checked here.
+  const unsaved =
+    transient === true &&
+    field.identity?.unique !== true &&
+    isValidAssignment(field, profileField, context)
+      ? new Map([[field.id, profileField]])
+      : undefined;
+  const [mapping] = mapWithAssignments([field], context, page, unsaved);
   const approvable =
     mapping?.status === 'mapped' ||
     mapping?.status === 'review' ||
@@ -400,8 +507,11 @@ function prepareInstruction(
   }
   const { name, htmlId, label } = field.signals;
   const record = field.record && { collection: field.record.collection, index: field.record.index };
-  // An assigned repeated field carries only its repeat count to the page (never the record).
-  const repeatedCount = mapping.status === 'assigned' ? field.repeatedCount : undefined;
+  // An assigned repeated field carries only its repeat count and identity to the page (never
+  // the record), and the page refuses the fill if either changed.
+  const assigned = mapping.status === 'assigned';
+  const repeatedCount = assigned ? field.repeatedCount : undefined;
+  const identity = assigned && field.identity ? { ...field.identity } : undefined;
   return {
     fieldId,
     value,
@@ -412,6 +522,7 @@ function prepareInstruction(
       label,
       ...(record ? { record } : {}),
       ...(repeatedCount ? { repeatedCount } : {}),
+      ...(identity ? { identity } : {}),
     },
   };
 }

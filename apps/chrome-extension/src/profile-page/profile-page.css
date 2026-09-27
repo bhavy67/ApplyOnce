@@ -293,3 +293,7 @@ dialog h2 {
   font: inherit;
   resize: vertical;
 }
+
+.saved-assignments .unavailable {
+  color: var(--danger);
+}

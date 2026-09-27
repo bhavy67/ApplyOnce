@@ -189,6 +189,8 @@ describe('detection', () => {
         disabled: false,
         custom: { pattern, supported: true },
         signals: { htmlId: 'mode', label: 'Work mode' },
+        // Phase 14: every scanned field has a semantic identity (unique here).
+        identity: { key: expect.stringMatching(/^fp-[0-9a-f]{16}$/) as string, unique: true },
       },
     ]);
   });

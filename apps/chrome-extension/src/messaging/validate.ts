@@ -39,7 +39,7 @@ export function isBoundedArray(value: unknown): value is unknown[] {
 export function isFormField(value: unknown): value is FormField {
   if (!isRecord(value)) return false;
   const { id, type, htmlType, required, visible, disabled, readOnly, groupSize } = value;
-  const { signals, form, options, custom, repeatedCount, record } = value;
+  const { signals, form, options, custom, repeatedCount, record, identity } = value;
   return (
     typeof id === 'string' &&
     typeof type === 'string' &&
@@ -53,6 +53,7 @@ export function isFormField(value: unknown): value is FormField {
     (repeatedCount === undefined ||
       (Number.isInteger(repeatedCount) && (repeatedCount as number) > 0)) &&
     (record === undefined || isFieldRecord(record)) &&
+    (identity === undefined || isFieldIdentity(identity)) &&
     (custom === undefined ||
       (isRecord(custom) &&
         typeof custom.pattern === 'string' &&
@@ -81,7 +82,18 @@ export function isFillInstruction(value: unknown): value is FillInstruction {
     ['name', 'htmlId', 'label'].every((key) => isOptionalString(expected[key])) &&
     (expected.record === undefined || isFieldRecord(expected.record)) &&
     (expected.repeatedCount === undefined ||
-      (Number.isInteger(expected.repeatedCount) && (expected.repeatedCount as number) > 1))
+      (Number.isInteger(expected.repeatedCount) && (expected.repeatedCount as number) > 1)) &&
+    (expected.identity === undefined || isFieldIdentity(expected.identity))
+  );
+}
+
+/** A field identity: an "fp-" fingerprint and whether it is unique on the page. */
+function isFieldIdentity(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.key === 'string' &&
+    /^fp-[0-9a-f]{16}$/.test(value.key) &&
+    typeof value.unique === 'boolean'
   );
 }
 

@@ -45,11 +45,28 @@ export interface FormField {
    * among those blocks on the page. Such fields map only to that record's fields.
    */
   record?: FormFieldRecord;
+  /**
+   * The field's semantic identity on this page (see FieldIdentity). Set by the scanner;
+   * used to keep explicit record assignments on the right field.
+   */
+  identity?: FieldIdentity;
   signals: FieldSignals;
   /** The enclosing form, when the field belongs to one. Many pages have none. */
   form?: FormContext;
   /** Choices for select/radio fields. Which choice is selected is never captured. */
   options?: readonly FieldOption[];
+}
+
+/**
+ * A deterministic fingerprint of a field's semantic metadata (form, fieldset legend, labeled
+ * container, question, control type, stable name/id, autocomplete, platform key): never its
+ * position, value, classes, or surrounding page text. `unique` is false when another field
+ * on the page has the same fingerprint: then neither has a stable identity.
+ */
+export interface FieldIdentity {
+  /** "fp-" + 16 hex digits. Opaque; never shown to the user or written to the page. */
+  key: string;
+  unique: boolean;
 }
 
 export interface FormFieldRecord {

@@ -220,6 +220,13 @@ function AssignEditor({ field, current, onSave, onCancel }: AssignEditorProps) {
   return (
     <div className="teach-editor assign-editor">
       <label htmlFor={selectId}>Assign to record</label>
+      {field.identity?.unique !== true && (
+        <p className="note warning" role="note">
+          This question appears more than once with nothing to tell the copies apart, so ApplyOnce
+          can’t keep track of which is which. This assignment won’t be saved: it applies only until
+          you close this popup.
+        </p>
+      )}
       {choices === undefined ? (
         <p className="note">Loading your records…</p>
       ) : groups.length === 0 ? (

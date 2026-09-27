@@ -99,6 +99,14 @@ async function fillOne(
   // Re-checked on the page as it is now. A repeated question is filled only when the user
   // assigned this field to a profile record, and only if the repetition is unchanged since
   // Analyze; a question that has become repeated no longer identifies one profile record.
+  // An assigned field must still have the identity it had when it was approved.
+  if (
+    expected.identity &&
+    (field.identity?.key !== expected.identity.key ||
+      field.identity.unique !== expected.identity.unique)
+  ) {
+    return skipped('This field is not the one that was assigned. Analyze again.');
+  }
   if (expected.repeatedCount !== undefined) {
     if (field.repeatedCount !== expected.repeatedCount) {
       return skipped('The repeated questions on the page changed. Analyze again.');

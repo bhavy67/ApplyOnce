@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 13 — Explicit record assignment + stable record identity: complete.**
+**Phase 14 — Stable generic field identity + assignment management: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -46,6 +46,9 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 13: every profile record has a stable id, and you can explicitly **assign** a
   repeated field to one specific record ("this Degree is Education 1's"). See
   [Record assignment](#explicit-record-assignment).
+- Phase 14: assignments follow the field itself (not its position) whenever the page lets
+  ApplyOnce tell identical questions apart, and the profile page lists saved assignments so
+  you can remove them. See [Field identity](#field-identity).
 
 Nothing is ever submitted. Greenhouse gets dedicated support in a later phase; until then
 it is handled by the generic adapter.
@@ -316,19 +319,66 @@ Record assignment is explicit user action.**
   longer exists", cannot be selected, and is never filled from another record. A new record
   gets a new id and never inherits an old assignment.
 - **Scope (page-scoped, not question-level).** An assignment is stored locally for this page
-  (origin + path) and this field: its field id and metadata, including how many times its
-  question appears. If the page structure changes (for example another copy of the question
-  appears), the assignment no longer applies and the field must be assigned again. It never
-  applies to other pages or to other fields asking the same question, and saved Teach Once
-  mappings still never apply to repeated fields.
+  (origin + path) and this field, identified by its field identity (below) and metadata,
+  including how many times its question appears. If the field or the repetition changes
+  (for example another copy of the question appears, or the field is renamed), the
+  assignment no longer applies and the field must be assigned again. It never applies to
+  other pages or to other fields asking the same question, and saved Teach Once mappings still
+  never apply to repeated fields.
 - **Teach Once vs. Assign record.** Teach Once maps a question to a profile field wherever
   it appears once. Assign record maps one repeated field instance on one page to one specific
   record. They are stored separately.
 - **At fill time** the service worker re-checks the assignment (same field, record still
   there, compatible type, value present) and the page re-checks that the field and its
   repetition are unchanged. Anything that fails is skipped; other fields still fill.
-- **Privacy.** Record ids, record lists, and assignments stay inside the extension; the page
-  receives only the approved value for each approved field.
+- **Privacy.** Record ids, record lists, field identities, and assignments stay inside the
+  extension; the page receives only the approved value for each approved field.
+
+### Field identity
+
+**ApplyOnce never uses page position alone as stable identity.** Each scanned field gets a
+fingerprint of its semantic metadata, strongest signals first:
+
+1. a platform key the site adapter owns (e.g. a Workday automation id);
+2. the element's own id, unless it looks framework-generated (React `:r1:` / `«r1»` /
+   `_r_1_`, `v-12`, `mat-input-7`, `mui-3`, UUIDs, long hex, …), since those change on
+   re-render;
+3. the `name` attribute and the autocomplete token;
+4. the context: form id/name/action, fieldset legend, and the nearest explicitly labeled
+   container (a section/group/region with `aria-label` or `aria-labelledby`);
+5. the question (label, aria-label, or placeholder) and the control type.
+
+Never used: position or index, classes, current values, profile values, or other page text.
+The fingerprint is never shown, logged, or written to the page.
+
+- **Stable identity.** When no other field on the page has the same fingerprint, a saved
+  assignment is matched by it: it follows the field when the page reorders fields, and
+  through React, Vue, or Angular re-renders that recreate nodes and change generated ids.
+- **No stable identity.** When two fields are truly identical (same question, no
+  distinguishing name, id, or context), neither has a stable identity. You can still assign
+  them, with a warning, but the assignment is **not saved**: it applies only until you close
+  the popup. **When a page provides no stable way to distinguish identical fields,
+  assignments may remain page-scoped and require reassignment after structural changes.**
+  (Within one popup session, ApplyOnce cannot notice two truly identical fields being swapped.)
+- **Duplicate identity.** If two fields on the page match a saved assignment's identity, it
+  applies to neither.
+- **Changed field.** A field whose identity changed (e.g. a new `name`) does not inherit the
+  old assignment; the page also refuses a fill if the field's identity changed since Analyze.
+- **Earlier assignments.** Assignments saved by version 0.14 (no identity) are kept and still
+  apply when the field's id comes from its own `id`/`name` attribute and the field is
+  uniquely identifiable; otherwise they stay listed (marked "saved by an earlier version")
+  until you remove them or assign the field again.
+
+### Managing saved assignments
+
+The profile page has three separate parts: the profile, **Saved field mappings** (Teach
+Once), and **Saved assignments** (with a count). Each assignment shows the site and path,
+the question, the control type, and the record and field ("→ Education 2 · Degree", from the
+record's current position); never record contents, ids, or page values. An assignment whose
+record was deleted shows **Unavailable (record deleted)** and is never retargeted. **Remove**
+deletes one; **Clear all assignments…** (with confirmation) deletes them all. Neither
+changes the profile, saved field mappings, or any page. **Clear profile** does not delete
+assignments: they stay listed as unavailable until removed.
 
 ### Migration
 

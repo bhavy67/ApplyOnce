@@ -189,6 +189,9 @@ export function mappingNote(mapping: ReviewedMapping, selected: boolean): string
       if (!mapping.hasValue) return 'No value in your profile.';
       if (selected) return 'Ready to fill';
       if (mapping.status === 'taught') return 'Taught by you. Select to fill.';
+      if (mapping.status === 'assigned' && mapping.transient) {
+        return 'Assigned for now only (identical copies can’t be told apart; not saved). Select to fill.';
+      }
       if (mapping.status === 'assigned') return 'Assigned by you. Select to fill.';
       return mapping.status === 'review' ? 'Needs review. Select to fill.' : 'Not selected';
   }

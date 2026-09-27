@@ -9,23 +9,33 @@ import {
 import { isPageKey } from '../messaging/validate';
 import type { ExtensionStorageSchema } from './profile-repository';
 
-/** Bump when the stored shape changes; unknown versions are refused, never discarded. */
-export const RECORD_ASSIGNMENTS_VERSION = 1;
+/**
+ * Bump when the stored shape changes; unknown versions are refused, never discarded.
+ *
+ * - 1: page, field id, field metadata, target (Phase 13).
+ * - 2: plus `identityKey`, the field's semantic identity (Phase 14). Version 1 entries are
+ *   read unchanged (no identity key) and kept until removed or reassigned.
+ */
+export const RECORD_ASSIGNMENTS_VERSION = 2;
 
 /** Oldest assignments beyond this are dropped: they are page-scoped and cheap to redo. */
 export const MAX_RECORD_ASSIGNMENTS = 500;
 
 /**
  * The user's explicit choice of profile record for one repeated field on one page
- * ("the second Degree on this page is Education record <id>'s degree"). Page-scoped by
- * design: the field is identified by the page (origin + path), its field id, and its
- * metadata including how many times its question appears. If any of that differs, the
- * assignment does not apply and the field must be assigned again. Never a question-level
- * rule, so it cannot apply to other pages or other fields asking the same question.
+ * ("this Degree on this page is Education record <id>'s degree"). Page-scoped by design: the
+ * field is identified by the page (origin + path), its semantic identity (`identityKey`, a
+ * fingerprint unique on the page when saved), and its metadata including how many times its
+ * question appears. If any of that differs, the assignment does not apply and the field must
+ * be assigned again. Never a question-level rule. Only fields with a unique identity are
+ * saved; see the service worker for identical copies.
  */
 export interface RecordAssignment {
   page: string;
+  /** The field id when assigned (for removal and version 1 matching). */
   fieldId: string;
+  /** Semantic identity (FieldIdentity.key). Absent on entries saved by version 1. */
+  identityKey?: string;
   field: AssignedField;
   target: ProfileRecordIdTarget;
   /** ISO 8601 timestamps. */
@@ -43,8 +53,15 @@ export interface AssignedField {
 }
 
 export interface RecordAssignmentsRecord {
-  version: typeof RECORD_ASSIGNMENTS_VERSION;
+  version: typeof RECORD_ASSIGNMENTS_VERSION | 1;
   assignments: RecordAssignment[];
+}
+
+/** Identifies one stored assignment (for removal); built from stored data only. */
+export interface AssignmentHandle {
+  page: string;
+  fieldId: string;
+  identityKey?: string;
 }
 
 export type SaveAssignmentResult =
@@ -52,9 +69,15 @@ export type SaveAssignmentResult =
 
 export interface RecordAssignmentRepository {
   list(): Promise<RecordAssignment[]>;
-  /** Creates or replaces the assignment for this page and field (one per field). */
+  /**
+   * Creates or replaces the assignment for this page and field (one per field, by identity
+   * or field id). The field must have a unique identity.
+   */
   save(input: { page: string; field: FormField; target: string }): Promise<SaveAssignmentResult>;
-  delete(page: string, fieldId: string): Promise<boolean>;
+  /** Removes the assignments of this field (by identity or field id). */
+  deleteForField(page: string, field: FormField): Promise<boolean>;
+  /** Removes exactly one stored assignment. */
+  remove(handle: AssignmentHandle): Promise<boolean>;
   clear(): Promise<void>;
 }
 
@@ -63,6 +86,18 @@ export class UnsupportedRecordAssignmentsVersionError extends Error {
     super(`Record assignments have unsupported version ${String(storedVersion)}`);
     this.name = 'UnsupportedRecordAssignmentsVersionError';
   }
+}
+
+export function isIdentityKey(value: unknown): value is string {
+  return typeof value === 'string' && /^fp-[0-9a-f]{16}$/.test(value);
+}
+
+/** An entry belongs to this field: same page, and same identity (or, version 1, field id). */
+function isForField(a: RecordAssignment, page: string, field: FormField): boolean {
+  if (a.page !== page) return false;
+  return a.identityKey !== undefined
+    ? a.identityKey === field.identity?.key
+    : a.fieldId === field.id;
 }
 
 export function assignedFieldOf(field: FormField): AssignedField {
@@ -76,13 +111,22 @@ export function assignedFieldOf(field: FormField): AssignedField {
   };
 }
 
-/** The same field as when it was assigned: same kind, name/id, label, and repeat count. */
-export function isSameAssignedField(assigned: AssignedField, field: FormField): boolean {
+/**
+ * The same field as when it was assigned: same kind, name, label, and repeat count, and the
+ * same element id unless `byIdentity`. Entries matched by semantic identity skip the id: an
+ * authored id is already part of the identity, and a generated one (React, Vue, Angular, …)
+ * changes on every render.
+ */
+export function isSameAssignedField(
+  assigned: AssignedField,
+  field: FormField,
+  byIdentity = false,
+): boolean {
   const current = assignedFieldOf(field);
   return (
     assigned.type === current.type &&
     assigned.name === current.name &&
-    assigned.htmlId === current.htmlId &&
+    (byIdentity || assigned.htmlId === current.htmlId) &&
     assigned.label === current.label &&
     assigned.repeatedCount === current.repeatedCount
   );
@@ -102,7 +146,8 @@ export function createRecordAssignmentRepository(
   async function read(): Promise<RecordAssignment[]> {
     const record = await store.get('recordAssignments');
     if (record === undefined) return [];
-    if (record.version !== RECORD_ASSIGNMENTS_VERSION) {
+    // Version 1 entries have the same shape without identityKey: read as they are.
+    if (record.version !== RECORD_ASSIGNMENTS_VERSION && record.version !== 1) {
       throw new UnsupportedRecordAssignmentsVersionError(record.version);
     }
     return record.assignments;
@@ -117,6 +162,16 @@ export function createRecordAssignmentRepository(
   const write = (assignments: RecordAssignment[]) =>
     store.set('recordAssignments', { version: RECORD_ASSIGNMENTS_VERSION, assignments });
 
+  function removeWhere(predicate: (a: RecordAssignment) => boolean): Promise<boolean> {
+    return serialized(async () => {
+      const assignments = await read();
+      const remaining = assignments.filter((a) => !predicate(a));
+      if (remaining.length === assignments.length) return false;
+      await write(remaining);
+      return true;
+    });
+  }
+
   return {
     list: read,
 
@@ -127,34 +182,42 @@ export function createRecordAssignmentRepository(
         isRecordIdTarget(target) &&
         definition?.fieldTypes.includes(field.type) === true &&
         !field.record &&
-        (field.repeatedCount ?? 1) > 1;
+        (field.repeatedCount ?? 1) > 1 &&
+        field.identity?.unique === true &&
+        isIdentityKey(field.identity.key);
       if (!valid) return Promise.resolve({ ok: false, error: 'invalid-assignment' });
       return serialized(async () => {
         const assignments = await read();
-        const existing = assignments.find((a) => a.page === page && a.fieldId === field.id);
+        const identityKey = field.identity?.key;
+        const mine = (a: RecordAssignment) => isForField(a, page, field);
+        const existing = assignments.find(mine);
         const timestamp = now().toISOString();
         const assignment: RecordAssignment = {
           page,
           fieldId: field.id,
+          ...(identityKey ? { identityKey } : {}),
           field: assignedFieldOf(field),
           target,
           createdAt: existing?.createdAt ?? timestamp,
           updatedAt: timestamp,
         };
-        const others = assignments.filter((a) => a !== existing);
+        const others = assignments.filter((a) => !mine(a));
         await write([...others, assignment].slice(-MAX_RECORD_ASSIGNMENTS));
         return { ok: true as const, assignment };
       });
     },
 
-    delete(page, fieldId) {
-      return serialized(async () => {
-        const assignments = await read();
-        const remaining = assignments.filter((a) => !(a.page === page && a.fieldId === fieldId));
-        if (remaining.length === assignments.length) return false;
-        await write(remaining);
-        return true;
-      });
+    deleteForField(page, field) {
+      return removeWhere((a) => isForField(a, page, field));
+    },
+
+    remove(handle) {
+      return removeWhere(
+        (a) =>
+          a.page === handle.page &&
+          a.fieldId === handle.fieldId &&
+          a.identityKey === handle.identityKey,
+      );
     },
 
     clear: () => serialized(() => store.remove('recordAssignments')),

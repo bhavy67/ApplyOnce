@@ -169,8 +169,11 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
 
   async function fill() {
     const approvals = scan.fields.flatMap((field) => {
-      const profileField = mappingsById.get(field.id)?.profileField;
-      return selected.has(field.id) && profileField ? [{ field, profileField }] : [];
+      const mapping = mappingsById.get(field.id);
+      const profileField = mapping?.profileField;
+      if (!selected.has(field.id) || !profileField) return [];
+      // An unsaved assignment (identical copies) is sent with its approval and re-checked.
+      return [{ field, profileField, ...(mapping.transient ? { transient: true } : {}) }];
     });
     setFilling(true);
     setFillError(undefined);

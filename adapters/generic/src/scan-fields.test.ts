@@ -71,6 +71,8 @@ describe('labels and signals', () => {
       visible: true,
       disabled: false,
       signals: { name: 'firstName', htmlId: 'first-name', label: 'First Name' },
+      // Phase 14: every scanned field has a semantic identity (unique here).
+      identity: { key: expect.stringMatching(/^fp-[0-9a-f]{16}$/) as string, unique: true },
     });
   });
 

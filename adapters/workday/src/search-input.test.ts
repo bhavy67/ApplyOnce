@@ -203,6 +203,8 @@ describe('detection', () => {
         disabled: false,
         custom: { pattern: 'search-input', supported: true },
         signals: { label: 'School or University*' },
+        // Phase 14: every scanned field has a semantic identity (unique here).
+        identity: { key: expect.stringMatching(/^fp-[0-9a-f]{16}$/) as string, unique: true },
       },
     ]);
   });

@@ -226,6 +226,26 @@ them, and `fillFields` skips a field whose fresh scan shows `repeatedCount > 1`
 (`mappingLine`) for such fields; unknown questions inside recognized record blocks keep
 "No match".
 
+**Field identity and assignment management (Phase 14).** After repeated-question marking,
+`scanControls` runs `markFieldIdentity` (`adapters/generic/field-identity.ts`): every field
+gets `FormField.identity = { key: "fp-" + FNV hash, unique }` over normalized metadata only
+(form id/name/action, fieldset legend, nearest aria-labelled section/group/region, question,
+type, name, id unless `isGeneratedId`, autocomplete, the adapter's `stableIdentity` key,
+record position). `unique` is false when another field shares the key; position is never a
+component. The assignment repository is version 2 (`identityKey` on entries; version 1
+entries are read unchanged). `save` requires a unique identity and replaces entries of the
+same field (same identity, or a version 1 entry with the same field id). The service worker
+matches saved assignments by `identityKey` only for a field whose identity is unique now
+(`isSameAssignedField(..., byIdentity)` ignores the element id, which may be generated);
+version 1 entries match only attribute-based field ids (`id:`, `name:`, `key:` without `~`) on
+uniquely identified fields. Fields without a unique identity get an unsaved assignment:
+`SaveAssignment` returns a `transient` reviewed mapping without storing it, the popup sends
+`transient: true` with that approval, and the service worker re-validates it at fill.
+Assigned fill instructions carry `expected.identity`; `fillFields` refuses a field whose
+identity changed. Extension-only messages `ListAssignments` (labels only: site, path,
+question, type, "Education 2 · Degree", available, kind), `RemoveAssignment` (a handle built
+from stored data), and `ClearAssignments` back the profile page's Saved assignments section.
+
 **Explicit record assignment (Phase 13).** Record-id targets
 (`<collection>@<recordId>.<field>`, `recordIdTarget`) resolve only against the definitions
 (`resolveProfileTarget`, record `recordId`) and, for a value, an existing record with that id

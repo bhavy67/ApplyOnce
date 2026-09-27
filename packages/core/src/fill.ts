@@ -1,4 +1,4 @@
-import type { FieldSignals, FormFieldRecord } from './form-field';
+import type { FieldIdentity, FieldSignals, FormFieldRecord } from './form-field';
 import type { FieldType } from './field-type';
 
 /** A single profile value, as it is sent to the page for filling. */
@@ -21,6 +21,8 @@ export interface FillInstruction {
      * (The record itself is never sent to the page.)
      */
     repeatedCount?: number;
+    /** For an assigned field: its identity at analysis, which must still hold. */
+    identity?: FieldIdentity;
   } & Pick<FieldSignals, 'name' | 'htmlId' | 'label'>;
 }
 

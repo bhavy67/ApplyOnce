@@ -22,6 +22,14 @@ const degree = (id: string, extra: Partial<FormField> = {}): FormField => ({
   disabled: false,
   repeatedCount: 2,
   signals: { htmlId: id.slice(3), label: 'Degree' },
+  // As scanned since Phase 14: a unique semantic identity per field.
+  identity: {
+    key: `fp-${[...id]
+      .reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7)
+      .toString(16)
+      .padStart(16, '0')}`,
+    unique: true,
+  },
   ...extra,
 });
 
@@ -86,8 +94,8 @@ describe('record assignment repository', () => {
       target: `education@${B}.degree`,
     });
     expect(await repository.list()).toHaveLength(3);
-    expect(await repository.delete(PAGE, 'id:d1')).toBe(true);
-    expect(await repository.delete(PAGE, 'id:d1')).toBe(false);
+    expect(await repository.deleteForField(PAGE, degree('id:d1'))).toBe(true);
+    expect(await repository.deleteForField(PAGE, degree('id:d1'))).toBe(false);
     expect((await repository.list()).map((a) => [a.page, a.fieldId])).toEqual([
       [PAGE, 'id:d2'],
       ['https://jobs.example.com/other', 'id:d1'],
@@ -155,5 +163,108 @@ describe('record assignment repository', () => {
     expect(
       isSameAssignedField(assigned, degree('id:d1', { type: 'select', htmlType: 'select-one' })),
     ).toBe(false);
+  });
+});
+
+describe('record assignment repository: Phase 14 identities', () => {
+  let store: ReturnType<typeof createIndexedDbStore<ExtensionStorageSchema>>;
+  const open = () => createRecordAssignmentRepository(store);
+  beforeEach(() => {
+    store = createIndexedDbStore<ExtensionStorageSchema>({
+      databaseName: 'assign14',
+      factory: new IDBFactory(),
+    });
+  });
+
+  it('saves the field identity and writes version 2', async () => {
+    const saved = await open().save({
+      page: PAGE,
+      field: degree('id:d1'),
+      target: `education@${A}.degree`,
+    });
+    expect(saved.ok && saved.assignment.identityKey).toMatch(/^fp-[0-9a-f]{16}$/);
+    expect((await store.get('recordAssignments'))?.version).toBe(2);
+  });
+
+  it('refuses to save a field without a unique identity', async () => {
+    const identical = degree('id:d1', { identity: { key: 'fp-0000000000000001', unique: false } });
+    const noIdentity = { ...degree('id:d2'), identity: undefined };
+    expect(
+      await open().save({ page: PAGE, field: identical, target: `education@${A}.degree` }),
+    ).toEqual({ ok: false, error: 'invalid-assignment' });
+    expect(
+      await open().save({ page: PAGE, field: noIdentity, target: `education@${A}.degree` }),
+    ).toEqual({ ok: false, error: 'invalid-assignment' });
+  });
+
+  it('reads version 1 entries unchanged (non-destructive migration) and keeps them on write', async () => {
+    const legacy = {
+      page: PAGE,
+      fieldId: 'id:old',
+      field: { type: 'text' as const, htmlId: 'old', label: 'Degree', repeatedCount: 2 },
+      target: `education@${A}.degree` as const,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    await store.set('recordAssignments', { version: 1, assignments: [legacy] });
+    expect(await open().list()).toEqual([legacy]);
+    await open().save({ page: PAGE, field: degree('id:d1'), target: `education@${B}.degree` });
+    const stored = await store.get('recordAssignments');
+    expect(stored?.version).toBe(2);
+    expect(stored?.assignments[0]).toEqual(legacy);
+  });
+
+  it('reassigning a field replaces its version 1 entry and any entry with the same identity', async () => {
+    const legacy = {
+      page: PAGE,
+      fieldId: 'id:d1',
+      field: { type: 'text' as const, htmlId: 'd1', label: 'Degree', repeatedCount: 2 },
+      target: `education@${A}.degree` as const,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    await store.set('recordAssignments', { version: 1, assignments: [legacy] });
+    await open().save({ page: PAGE, field: degree('id:d1'), target: `education@${B}.degree` });
+    // Same identity, now under another field id (e.g. after a reorder): still one entry.
+    await open().save({
+      page: PAGE,
+      field: { ...degree('id:d1'), id: 'id:moved' },
+      target: `education@${A}.degree`,
+    });
+    const list = await open().list();
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ fieldId: 'id:moved', target: `education@${A}.degree` });
+  });
+
+  it('removes exactly one entry by its handle, and deletes a field’s entries by identity', async () => {
+    await open().save({ page: PAGE, field: degree('id:d1'), target: `education@${A}.degree` });
+    await open().save({ page: PAGE, field: degree('id:d2'), target: `education@${B}.degree` });
+    const [first] = await open().list();
+    if (!first) throw new Error('none');
+    expect(
+      await open().remove({
+        page: first.page,
+        fieldId: first.fieldId,
+        identityKey: first.identityKey,
+      }),
+    ).toBe(true);
+    expect(
+      await open().remove({
+        page: first.page,
+        fieldId: first.fieldId,
+        identityKey: first.identityKey,
+      }),
+    ).toBe(false);
+    expect((await open().list()).map((a) => a.fieldId)).toEqual(['id:d2']);
+    expect(await open().deleteForField(PAGE, { ...degree('id:d2'), id: 'id:other' })).toBe(true);
+    expect(await open().list()).toEqual([]);
+  });
+
+  it('refuses an unknown newer version', async () => {
+    await store.set('recordAssignments', {
+      version: 3,
+      assignments: [],
+    } as unknown as ExtensionStorageSchema['recordAssignments']);
+    await expect(open().list()).rejects.toBeInstanceOf(UnsupportedRecordAssignmentsVersionError);
   });
 });

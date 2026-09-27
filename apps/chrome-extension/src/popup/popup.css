@@ -235,3 +235,7 @@ body {
   align-self: flex-start;
   font-size: 12px;
 }
+
+.assign-editor .note.warning {
+  color: #9a6700;
+}

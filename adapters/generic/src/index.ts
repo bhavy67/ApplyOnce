@@ -21,5 +21,6 @@ export {
   type CustomFiller,
   type FillOptions,
 } from './fill-fields';
+export { isGeneratedId, markFieldIdentity } from './field-identity';
 export { genericAdapter } from './generic-adapter';
 export { scanControls, scanFields, type ScannedField, type ScanOptions } from './scan-fields';

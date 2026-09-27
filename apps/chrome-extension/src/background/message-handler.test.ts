@@ -2,7 +2,7 @@ import type { FieldType, FillInstruction, FormField } from '@applyonce/core';
 import { createEmptyProfile, type Profile } from '@applyonce/profile';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { MessageType, type ReviewedMapping } from '../messaging/protocol';
+import { MessageType, type AssignmentView, type ReviewedMapping } from '../messaging/protocol';
 import { createIndexedDbStore } from '../storage/indexeddb-store';
 import {
   createProfileRepository,
@@ -1246,9 +1246,18 @@ describe('Phase 13: explicit record assignment', () => {
     ],
     workExperience: [{ id: W1, company: 'Company A', title: 'Title A' }],
   };
+  // As scanned since Phase 14: distinct ids give each copy a unique semantic identity.
+  const identityOf = (id: string) => ({
+    key: `fp-${[...id]
+      .reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7)
+      .toString(16)
+      .padStart(16, '0')}`,
+    unique: true,
+  });
   const degree = (id: string): FormField => ({
     ...field(id, 'text', { htmlId: id.slice(3), label: 'Degree' }),
     repeatedCount: 2,
+    identity: identityOf(id),
   });
   const [d1, d2] = [degree('id:d1'), degree('id:d2')];
   const university = field('id:uni', 'text', { htmlId: 'uni', label: 'University' });
@@ -1310,12 +1319,24 @@ describe('Phase 13: explicit record assignment', () => {
       {
         fieldId: 'id:d1',
         value: 'Degree A',
-        expected: { type: 'text', htmlId: 'd1', label: 'Degree', repeatedCount: 2 },
+        expected: {
+          type: 'text',
+          htmlId: 'd1',
+          label: 'Degree',
+          repeatedCount: 2,
+          identity: identityOf('id:d1'),
+        },
       },
       {
         fieldId: 'id:d2',
         value: 'Degree B',
-        expected: { type: 'text', htmlId: 'd2', label: 'Degree', repeatedCount: 2 },
+        expected: {
+          type: 'text',
+          htmlId: 'd2',
+          label: 'Degree',
+          repeatedCount: 2,
+          identity: identityOf('id:d2'),
+        },
       },
       {
         fieldId: 'id:uni',
@@ -1511,5 +1532,323 @@ describe('Phase 13: explicit record assignment', () => {
       ok: false,
       error: 'forbidden',
     });
+  });
+});
+
+describe('Phase 14: stable field identity and assignment management', () => {
+  const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const PAGE = 'https://jobs.example.com/apply';
+  const profile14: Profile = {
+    ...sampleProfile,
+    schemaVersion: 4,
+    education: [
+      { id: A, institution: 'University A', degree: 'Degree A' },
+      { id: B, institution: 'University B', degree: 'Degree B' },
+    ],
+  };
+  const KEY_UG = 'fp-00000000000000a1';
+  const KEY_PG = 'fp-00000000000000b2';
+  /** A repeated "Degree" as scanned: field id, name, and identity as given. */
+  const degree = (id: string, name: string, key: string, unique = true): FormField => ({
+    ...field(id, 'text', { name, label: 'Degree' }),
+    repeatedCount: 2,
+    identity: { key, unique },
+  });
+  type Handle = Awaited<ReturnType<typeof setup>>['handle'];
+  const assign = (handle: Handle, f: FormField, target: string) =>
+    handle(
+      { type: MessageType.SaveAssignment, payload: { page: PAGE, field: f, target } },
+      EXTENSION_PAGE,
+    );
+  const map = async (handle: Handle, fields: FormField[]) => {
+    const response = await handle(
+      { type: MessageType.MapFields, payload: { fields, page: PAGE } },
+      EXTENSION_PAGE,
+    );
+    return (response as { data: { mappings: ReviewedMapping[] } }).data.mappings;
+  };
+  const fill = (
+    handle: Handle,
+    approvals: { field: FormField; profileField: string; transient?: boolean }[],
+  ) =>
+    handle(
+      { type: MessageType.FillPage, payload: { tabId: 3, approvals, page: PAGE } },
+      EXTENSION_PAGE,
+    );
+
+  it('assignments follow the field identity when the page reorders the fields', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile14, fillInTab);
+    // Same name on both copies, so the field ids are positional (name:degree, name:degree~2).
+    const ug = degree('name:degree', 'degree', KEY_UG);
+    const pg = degree('name:degree~2', 'degree', KEY_PG);
+    await assign(handle, ug, `education@${A}.degree`);
+    await assign(handle, pg, `education@${B}.degree`);
+    // Swapped on the page: the positional ids now belong to the other copy.
+    const pgFirst = degree('name:degree', 'degree', KEY_PG);
+    const ugSecond = degree('name:degree~2', 'degree', KEY_UG);
+    expect((await map(handle, [pgFirst, ugSecond])).map((m) => m.profileField)).toEqual([
+      `education@${B}.degree`,
+      `education@${A}.degree`,
+    ]);
+    await fill(handle, [
+      { field: pgFirst, profileField: `education@${B}.degree` },
+      { field: ugSecond, profileField: `education@${A}.degree` },
+    ]);
+    expect(
+      calls[0]?.instructions.map((i) => [i.fieldId, i.value, i.expected.identity?.key]),
+    ).toEqual([
+      ['name:degree', 'Degree B', KEY_PG],
+      ['name:degree~2', 'Degree A', KEY_UG],
+    ]);
+  });
+
+  it('two current fields with the same saved identity get neither (duplicate identity)', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile14, fillInTab);
+    await assign(handle, degree('id:a', 'degree_a', KEY_UG), `education@${A}.degree`);
+    const dupes = [
+      degree('id:a', 'degree_a', KEY_UG, false),
+      degree('id:b', 'degree_a', KEY_UG, false),
+    ];
+    expect((await map(handle, dupes)).map((m) => m.unsupportedReason)).toEqual([
+      'repeated-question',
+      'repeated-question',
+    ]);
+    await fill(handle, [{ field: dupes[0] as FormField, profileField: `education@${A}.degree` }]);
+    expect(calls).toEqual([]);
+  });
+
+  it('a changed field identity does not inherit the old assignment', async () => {
+    const { handle } = await setup(profile14);
+    await assign(handle, degree('name:degree_one', 'degree_one', KEY_UG), `education@${A}.degree`);
+    const changed = degree('name:degree_two', 'degree_two', KEY_PG);
+    expect((await map(handle, [changed]))[0]).toMatchObject({
+      status: 'unsupported',
+      unsupportedReason: 'repeated-question',
+    });
+  });
+
+  it('identical copies: the assignment is not saved, holds for this review, and is re-checked at fill', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle, store } = await setup(profile14, fillInTab);
+    const KEY = 'fp-00000000000000cc';
+    const [c1, c2] = [degree('index:1', '', KEY, false), degree('index:2', '', KEY, false)];
+    const response = await assign(handle, c1, `education@${A}.degree`);
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        mapping: { status: 'assigned', transient: true, targetLabel: 'Education 1 → Degree' },
+      },
+    });
+    expect(await store.get('recordAssignments')).toBeUndefined();
+    // A later analysis has no assignment for it.
+    expect((await map(handle, [c1, c2]))[0]?.status).toBe('unsupported');
+    // The approval carries it; the service worker re-checks it, and the page checks identity.
+    const results = await fill(handle, [
+      { field: c1, profileField: `education@${A}.degree`, transient: true },
+      { field: c2, profileField: `education@${B}.degree` },
+    ]);
+    expect(results).toMatchObject({
+      data: { results: [{ status: 'filled' }, { status: 'failed' }] },
+    });
+    expect(calls[0]?.instructions.map((i) => [i.fieldId, i.value, i.expected.identity])).toEqual([
+      ['index:1', 'Degree A', { key: KEY, unique: false }],
+    ]);
+  });
+
+  it('never accepts an unsaved assignment for a uniquely identified field or a bad target', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile14, fillInTab);
+    const unique = degree('id:u', 'degree_u', KEY_UG);
+    const identical = degree('index:1', '', 'fp-00000000000000cc', false);
+    const results = await fill(handle, [
+      { field: unique, profileField: `education@${A}.degree`, transient: true },
+      { field: identical, profileField: 'highest_degree', transient: true },
+      {
+        field: identical,
+        profileField: 'education@cccccccc-cccc-4ccc-8ccc-cccccccccccc.degree',
+        transient: true,
+      },
+    ]);
+    expect(results).toMatchObject({
+      data: { results: [{ status: 'failed' }, { status: 'failed' }, { status: 'failed' }] },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('honors version 1 assignments only for uniquely identified fields with attribute ids', async () => {
+    const { handle, store } = await setup(profile14);
+    const legacy = (fieldId: string, htmlId?: string) => ({
+      page: PAGE,
+      fieldId,
+      field: {
+        type: 'text' as const,
+        ...(htmlId ? { htmlId } : {}),
+        name: htmlId ?? '',
+        label: 'Degree',
+        repeatedCount: 2,
+      },
+      target: `education@${A}.degree` as const,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    await store.set('recordAssignments', {
+      version: 1,
+      assignments: [legacy('name:d1', 'd1'), legacy('index:4')],
+    });
+    const attributeField = degree('name:d1', 'd1', KEY_UG);
+    attributeField.signals = { ...attributeField.signals, htmlId: 'd1' };
+    const positional = { ...degree('index:4', '', KEY_PG), signals: { name: '', label: 'Degree' } };
+    const [a, b] = await map(handle, [attributeField, positional]);
+    expect(a).toMatchObject({ status: 'assigned', profileField: `education@${A}.degree` });
+    expect(b).toMatchObject({ status: 'unsupported', unsupportedReason: 'repeated-question' });
+  });
+
+  it('lists assignments with labels only; removes one; clears all without touching the profile or mappings', async () => {
+    const { handle, store } = await setup(profile14);
+    await handle(
+      {
+        type: MessageType.SaveMapping,
+        payload: {
+          field: field('id:x', 'text', { htmlId: 'x', label: 'Alma mater' }),
+          profileField: 'institution',
+        },
+      },
+      EXTENSION_PAGE,
+    );
+    await assign(
+      handle,
+      degree('name:degree_undergrad', 'degree_undergrad', KEY_UG),
+      `education@${A}.degree`,
+    );
+    await assign(
+      handle,
+      degree('name:degree_postgrad', 'degree_postgrad', KEY_PG),
+      `education@${B}.degree`,
+    );
+    await store.set('profile', { ...profile14, education: [profile14.education[1] ?? {}] }); // A deleted
+    const listed = await handle({ type: MessageType.ListAssignments }, EXTENSION_PAGE);
+    const views = (listed as { data: { assignments: AssignmentView[] } }).data.assignments;
+    expect(
+      views.map(({ site, path, question, controlType, target, available, kind }) => ({
+        site,
+        path,
+        question,
+        controlType,
+        target,
+        available,
+        kind,
+      })),
+    ).toEqual([
+      {
+        site: 'jobs.example.com',
+        path: '/apply',
+        question: 'Degree',
+        controlType: 'text',
+        target: 'Education · Degree',
+        available: false,
+        kind: 'identity',
+      },
+      {
+        site: 'jobs.example.com',
+        path: '/apply',
+        question: 'Degree',
+        controlType: 'text',
+        target: 'Education 1 · Degree',
+        available: true,
+        kind: 'identity',
+      },
+    ]);
+    const shown = JSON.stringify(views.map((view) => ({ ...view, handle: undefined })));
+    expect(shown).not.toMatch(/aaaaaaaa|bbbbbbbb|fp-|name:|University|Degree A|Degree B/);
+    const [first] = views;
+    expect(
+      await handle(
+        { type: MessageType.RemoveAssignment, payload: { handle: first?.handle } },
+        EXTENSION_PAGE,
+      ),
+    ).toEqual({ ok: true, data: { removed: true } });
+    const profileBefore = await store.get('profile');
+    const mappingsBefore = await store.get('savedMappings');
+    expect(await handle({ type: MessageType.ClearAssignments }, EXTENSION_PAGE)).toEqual({
+      ok: true,
+      data: { cleared: true },
+    });
+    expect(await handle({ type: MessageType.ListAssignments }, EXTENSION_PAGE)).toEqual({
+      ok: true,
+      data: { assignments: [] },
+    });
+    expect(await store.get('profile')).toEqual(profileBefore);
+    expect(await store.get('savedMappings')).toEqual(mappingsBefore);
+  });
+
+  it('management messages are refused for web pages and validated', async () => {
+    const { handle } = await setup(profile14);
+    for (const type of [MessageType.ListAssignments, MessageType.ClearAssignments]) {
+      expect(await handle({ type }, WEB_PAGE)).toEqual({ ok: false, error: 'forbidden' });
+    }
+    expect(
+      await handle(
+        { type: MessageType.RemoveAssignment, payload: { handle: { page: PAGE, fieldId: 'x' } } },
+        WEB_PAGE,
+      ),
+    ).toEqual({ ok: false, error: 'forbidden' });
+    for (const bad of [
+      {},
+      { handle: { page: 'not a url', fieldId: 'x' } },
+      { handle: { page: PAGE, fieldId: 'x', identityKey: 'nope' } },
+    ]) {
+      expect(
+        await handle({ type: MessageType.RemoveAssignment, payload: bad }, EXTENSION_PAGE),
+      ).toEqual({ ok: false, error: 'malformed-message' });
+    }
+  });
+});
+
+describe('Phase 14: generated ids across re-renders', () => {
+  it('an identity-matched assignment survives a re-render that changes a generated element id', async () => {
+    const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const PAGE = 'https://jobs.example.com/apply';
+    const profile: Profile = {
+      ...sampleProfile,
+      schemaVersion: 4,
+      education: [{ id: A, institution: 'University A', degree: 'Degree A' }],
+    };
+    const { handle } = await setup(profile);
+    const render = (generatedId: string): FormField => ({
+      ...field(`id:${generatedId}`, 'text', {
+        htmlId: generatedId,
+        name: 'degree_undergrad',
+        label: 'Degree',
+      }),
+      repeatedCount: 2,
+      identity: { key: 'fp-00000000000000a1', unique: true },
+    });
+    await handle(
+      {
+        type: MessageType.SaveAssignment,
+        payload: { page: PAGE, field: render(':r1:'), target: `education@${A}.degree` },
+      },
+      EXTENSION_PAGE,
+    );
+    const response = await handle(
+      { type: MessageType.MapFields, payload: { fields: [render(':r9:')], page: PAGE } },
+      EXTENSION_PAGE,
+    );
+    expect(response).toMatchObject({
+      data: { mappings: [{ status: 'assigned', profileField: `education@${A}.degree` }] },
+    });
+    // A different name is a different field: not matched even with the same identity key.
+    const renamed = {
+      ...render(':r9:'),
+      signals: { htmlId: ':r9:', name: 'degree_postgrad', label: 'Degree' },
+    };
+    const other = await handle(
+      { type: MessageType.MapFields, payload: { fields: [renamed], page: PAGE } },
+      EXTENSION_PAGE,
+    );
+    expect(other).toMatchObject({ data: { mappings: [{ status: 'unsupported' }] } });
   });
 });
