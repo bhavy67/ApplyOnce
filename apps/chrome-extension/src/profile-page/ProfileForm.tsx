@@ -196,7 +196,16 @@ function RecordSection({ collection, profile, errors, update }: RecordSectionPro
         type="button"
         className="secondary"
         disabled={!canAddRecord(profile, collection)}
-        onClick={() => update((p) => addRecord(p, collection))}
+        onClick={() =>
+          // While Education 1 is only a placeholder, it becomes a record first, so the click
+          // visibly adds Education 2 rather than silently turning the placeholder into data.
+          update((p) =>
+            addRecord(
+              recordCount(p, collection) < shown ? addRecord(p, collection) : p,
+              collection,
+            ),
+          )
+        }
       >
         + {addLabel}
       </button>
