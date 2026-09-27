@@ -206,6 +206,20 @@ carries `record`; `fillFields` treats a changed record position as not found. Me
 validation accepts `record` only with a known collection and an index below
 `MAX_PROFILE_RECORDS`.
 
+**Repeated questions without record context (Phase 12).** After record sections and the site
+adapter's `postProcess`, `scanControls` runs `markRepeatedQuestions`
+(`adapters/generic/repeated-questions.ts`, formerly Workday-only): visible fields without
+`record`, grouped by enclosing form (null = outside any form) and by their Teach key parts
+without the field type (question, legend context, identifier), get
+`repeatedCount = group size` when a group has two or more fields. `createMappingKeyParts`
+returns undefined for them (no key: no Teach, no saved-mapping lookup), and `mapFields`
+maps them before anything else to `unsupported` / `repeated-question` with no profile
+field and unknown confidence. The service worker's approval re-check therefore refuses
+them, and `fillFields` skips a field whose fresh scan shows `repeatedCount > 1`
+("now appears more than once"). The popup shows "Repeated question · no record context"
+(`mappingLine`) for such fields; unknown questions inside recognized record blocks keep
+"No match".
+
 **Search fields (Phase 9).** `fillFields` accepts a `fillCustom` hook: a site adapter's
 filler for custom controls, tried before the generic engine (returning `undefined` hands
 the field back). Without one, `search-input` stays unsupported, so generic pages are

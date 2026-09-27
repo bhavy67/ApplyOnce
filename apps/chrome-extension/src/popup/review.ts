@@ -11,6 +11,7 @@ import {
   type FieldType,
   type FillResult,
   type FillStatus,
+  type FormField,
   type ProfileTarget,
   type UnsupportedReason,
 } from '@applyonce/core';
@@ -39,7 +40,7 @@ const UNSUPPORTED_NOTES: Readonly<Record<UnsupportedReason, string>> = {
   'checkbox-group': 'One option of a multi-choice group. Will not be filled.',
   'unsupported-control': 'Custom dropdown ApplyOnce cannot operate safely. Will not be filled.',
   'repeated-question':
-    'This question repeats on the page (e.g. several records). Will not be filled.',
+    "Asked more than once, and ApplyOnce can't tell which profile record each one is for. Will not be filled.",
 };
 
 const FILLABLE_STATUSES: ReadonlySet<string> = new Set(['mapped', 'review', 'taught']);
@@ -64,6 +65,20 @@ export function initialSelection(mappings: readonly ReviewedMapping[]): Set<stri
 export function profileFieldDescription(mapping: ReviewedMapping): string | undefined {
   const target = resolveProfileTarget(mapping.profileField);
   return target && `${target.label} (${target.path})`;
+}
+
+/**
+ * The mapping line of a review item: the target and where it came from. A question asked more
+ * than once without record context says so instead of "No match": it was recognized, but no
+ * profile record can be chosen for each copy.
+ */
+export function mappingLine(mapping: ReviewedMapping, field: Pick<FormField, 'record'>): string {
+  const target = profileFieldDescription(mapping);
+  if (!target && mapping.unsupportedReason === 'repeated-question' && !field.record) {
+    return 'Repeated question · no record context';
+  }
+  const source = mappingSourceLabel(mapping);
+  return `${target ? `→ ${target}` : 'No match'}${source ? ` · ${source}` : ''}`;
 }
 
 /** Distinguishes what the user taught from what was inferred automatically. */

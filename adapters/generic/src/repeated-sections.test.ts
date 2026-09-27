@@ -80,13 +80,21 @@ describe('repeated record sections', () => {
   it('never uses field order or labels alone: repeated labels without record headings stay unmarked', () => {
     document.body.innerHTML = `<form><h2>Application</h2>
       <label for="a">Institution</label><input id="a"><label for="b">Institution</label><input id="b"></form>`;
-    expect(records()).toEqual({ 'id:a': '-', 'id:b': '-' });
+    // Not records; since Phase 12 the duplicate question is marked repeated (never filled).
+    expect(records()).toEqual({ 'id:a': 'repeated×2', 'id:b': 'repeated×2' });
   });
 
   it('ignores headings that only contain a record word', () => {
     document.body.innerHTML = `${block('div', 'Education preferences', ['a'])}${block('div', 'Education preferences', ['b'])}
       ${block('div', 'Experience with our products', ['c'])}${block('div', 'Experience with our products', ['d'])}`;
-    expect(records()).toEqual({ 'id:a': '-', 'id:b': '-', 'id:c': '-', 'id:d': '-' });
+    // No record sections. All four fields ask "Institution" outside any form, so since Phase 12
+    // they are one repeated question (never filled).
+    expect(records()).toEqual({
+      'id:a': 'repeated×4',
+      'id:b': 'repeated×4',
+      'id:c': 'repeated×4',
+      'id:d': 'repeated×4',
+    });
   });
 
   it('treats a wrapper holding the records as a wrapper; its own fields stay unmarked', () => {

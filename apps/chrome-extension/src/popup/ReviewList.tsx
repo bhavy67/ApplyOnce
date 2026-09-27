@@ -7,8 +7,7 @@ import {
   FILL_STATUS_LABELS,
   isSelectable,
   mappingNote,
-  mappingSourceLabel,
-  profileFieldDescription,
+  mappingLine,
   teachActionLabel,
   teachOptions,
 } from './review';
@@ -59,8 +58,6 @@ function ReviewItem({
   const [teaching, setTeaching] = useState(false);
   const isSelected = selected.has(field.id);
   const result = results.get(field.id);
-  const target = profileFieldDescription(mapping);
-  const source = mappingSourceLabel(mapping);
   const { name, htmlId } = field.signals;
 
   return (
@@ -75,10 +72,7 @@ function ReviewItem({
         />
         <label htmlFor={checkboxId} className="review-body">
           <span className="field-name">{fieldDisplayName(field)}</span>
-          <span className="mapping">
-            {target ? `→ ${target}` : 'No match'}
-            {source && ` · ${source}`}
-          </span>
+          <span className="mapping">{mappingLine(mapping, field)}</span>
           <span className="field-meta">
             {field.type}
             {name && ` · name="${name}"`}

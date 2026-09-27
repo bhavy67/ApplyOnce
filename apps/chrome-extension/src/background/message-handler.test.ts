@@ -1102,3 +1102,124 @@ describe('Phase 11: repeated application sections', () => {
     }
   });
 });
+
+describe('Phase 12: repeated questions without record context', () => {
+  const profile12: Profile = {
+    ...sampleProfile,
+    education: [
+      { institution: 'University A', degree: 'Degree A' },
+      { institution: 'University B', degree: 'Degree B' },
+    ],
+  };
+  const degree = (id: string): FormField => ({
+    ...field(id, 'text', { htmlId: id.slice(3), label: 'Degree' }),
+    repeatedCount: 2,
+  });
+  const university = field('id:uni', 'text', { htmlId: 'uni', label: 'University' });
+
+  it('reports repeated questions as unsupported with no target and no teach key', async () => {
+    const { handle } = await setup(profile12);
+    const response = await handle(
+      {
+        type: MessageType.MapFields,
+        payload: { fields: [degree('id:d1'), degree('id:d2'), university] },
+      },
+      EXTENSION_PAGE,
+    );
+    expect(response).toMatchObject({
+      data: {
+        mappings: [
+          { status: 'unsupported', unsupportedReason: 'repeated-question', hasValue: false },
+          { status: 'unsupported', unsupportedReason: 'repeated-question', hasValue: false },
+          { status: 'mapped', profileField: 'institution', hasValue: true },
+        ],
+      },
+    });
+    const mappings = (response as { data: { mappings: ReviewedMapping[] } }).data.mappings;
+    expect(
+      mappings.slice(0, 2).every((m) => m.profileField === undefined && m.mappingKey === undefined),
+    ).toBe(true);
+  });
+
+  it('refuses an explicit approval for a repeated field, and still fills the safe field', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile12, fillInTab);
+    const response = await handle(
+      {
+        type: MessageType.FillPage,
+        payload: {
+          tabId: 2,
+          approvals: [
+            { field: degree('id:d1'), profileField: 'highest_degree' },
+            { field: degree('id:d2'), profileField: 'education[1].degree' },
+            { field: university, profileField: 'institution' },
+          ],
+        },
+      },
+      EXTENSION_PAGE,
+    );
+    expect(response).toMatchObject({
+      data: { results: [{ status: 'failed' }, { status: 'failed' }, { status: 'filled' }] },
+    });
+    expect(calls.map((c) => c.instructions.map((i) => [i.fieldId, i.value]))).toEqual([
+      [['id:uni', 'University A']],
+    ]);
+  });
+
+  it('refuses to save a Teach Once mapping for a repeated field', async () => {
+    const { handle } = await setup(profile12);
+    expect(
+      await handle(
+        {
+          type: MessageType.SaveMapping,
+          payload: { field: degree('id:d1'), profileField: 'highest_degree' },
+        },
+        EXTENSION_PAGE,
+      ),
+    ).toEqual({ ok: false, error: 'invalid-mapping' });
+    expect(await handle({ type: MessageType.ListMappings }, EXTENSION_PAGE)).toMatchObject({
+      data: { mappings: [] },
+    });
+  });
+
+  it('a saved mapping for the question still works for a single field, never for repeated copies', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile12, fillInTab);
+    const single = field('id:single', 'text', { htmlId: 'single', label: 'Degree' });
+    await handle(
+      {
+        type: MessageType.SaveMapping,
+        payload: { field: single, profileField: 'education[1].degree' },
+      },
+      EXTENSION_PAGE,
+    );
+    const mapped = await handle(
+      { type: MessageType.MapFields, payload: { fields: [single, degree('id:d1')] } },
+      EXTENSION_PAGE,
+    );
+    expect(mapped).toMatchObject({
+      data: {
+        mappings: [
+          { status: 'taught', profileField: 'education[1].degree' },
+          { status: 'unsupported', source: 'automatic', unsupportedReason: 'repeated-question' },
+        ],
+      },
+    });
+    await handle(
+      {
+        type: MessageType.FillPage,
+        payload: {
+          tabId: 2,
+          approvals: [
+            { field: single, profileField: 'education[1].degree' },
+            { field: degree('id:d1'), profileField: 'education[1].degree' },
+          ],
+        },
+      },
+      EXTENSION_PAGE,
+    );
+    expect(calls.map((c) => c.instructions.map((i) => [i.fieldId, i.value]))).toEqual([
+      [['id:single', 'Degree B']],
+    ]);
+  });
+});

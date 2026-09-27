@@ -22,13 +22,15 @@ const KEY_VERSION = 'v1';
  *
  * Returns undefined when the field has none of these, so it cannot be taught. Fields in a
  * repeated record section have no key either: their record comes from their position, and
- * a key shared by every block ("Institution") would carry a mapping across records.
+ * a key shared by every block ("Institution") would carry a mapping across records. The
+ * same holds for a question repeated without record context (`repeatedCount`).
  */
 export function createMappingKeyParts(
   field: FormField,
   normalizeQuestionText?: (text: string) => string,
 ): MappingKeyParts | undefined {
-  if (field.record) return undefined;
+  // Repeated without record context: a key would carry one mapping to every copy.
+  if (field.record || (field.repeatedCount ?? 1) > 1) return undefined;
   const signature = createFieldSignature(field, normalizeQuestionText);
   const ownLabel = signature.label ?? signature.ariaLabel;
   const question = ownLabel ?? signature.placeholder ?? signature.nearbyText;

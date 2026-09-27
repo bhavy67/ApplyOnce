@@ -18,6 +18,7 @@ import {
   precedingText,
   wrapperLabelText,
 } from './field-text';
+import { markRepeatedQuestions } from './repeated-questions';
 import { markRepeatedSections } from './repeated-sections';
 import { isVisible } from './visibility';
 
@@ -157,8 +158,10 @@ export function scanControls(root: ParentNode, options: ScanOptions = {}): Scann
     scanned.push({ field, controls: [control] });
   });
 
+  // Record sections first (their fields have record context), then site adjustments, then
+  // questions still asked more than once without record context.
   markRepeatedSections(scanned);
-  return options.postProcess ? options.postProcess(scanned) : scanned;
+  return markRepeatedQuestions(options.postProcess ? options.postProcess(scanned) : scanned);
 
   function fieldId(element: HTMLElement, index: number): string {
     const stable = options.stableIdentity?.(element);

@@ -5,6 +5,7 @@ import {
   canTeach,
   initialSelection,
   isSelectable,
+  mappingLine,
   mappingNote,
   mappingSourceLabel,
   profileFieldDescription,
@@ -288,9 +289,34 @@ describe('Phase 8 repeated questions', () => {
       unsupportedReason: 'repeated-question',
     });
     expect(mappingNote(m, false)).toBe(
-      'This question repeats on the page (e.g. several records). Will not be filled.',
+      "Asked more than once, and ApplyOnce can't tell which profile record each one is for. Will not be filled.",
     );
     expect(isSelectable(m)).toBe(false);
     expect(canTeach(m)).toBe(false);
+  });
+});
+
+describe('Phase 12: mapping line', () => {
+  it('names a repeated question without record context instead of "No match"', () => {
+    const repeated = mapping({
+      fieldId: 'r',
+      status: 'unsupported',
+      unsupportedReason: 'repeated-question',
+      profileField: undefined,
+      confidence: { score: 0, level: 'unknown', reasons: [] },
+      hasValue: false,
+    });
+    expect(mappingLine(repeated, {})).toBe('Repeated question · no record context');
+    // An unknown question inside a recognized record block keeps "No match".
+    expect(mappingLine(repeated, { record: { collection: 'education', index: 1 } })).toBe(
+      'No match · Automatic · Unknown',
+    );
+  });
+
+  it('keeps the usual line for other mappings', () => {
+    expect(mappingLine(readyMapping, {})).toBe(
+      '→ Email (contact.email) · Automatic · High confidence',
+    );
+    expect(mappingLine(unknownMapping, {})).toBe('No match');
   });
 });

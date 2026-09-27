@@ -51,6 +51,7 @@ function mapField(
   savedMappings: SavedMappingLookup,
 ): FieldMapping {
   if (field.record) return mapRecordField(field, field.record);
+  if ((field.repeatedCount ?? 1) > 1) return mapRepeatedQuestion(field);
   const [mappingKey, ...legacyKeys] = mappingKeyCandidates(field);
   const base = { fieldId: field.id, ...(mappingKey ? { mappingKey } : {}) };
 
@@ -101,6 +102,22 @@ function usableSavedTarget(saved: SavedMapping, field: FormField): ProfileTarget
   const usable =
     saved.parts.fieldType === field.type && definition?.fieldTypes.includes(field.type) === true;
   return usable ? definition.target : undefined;
+}
+
+/**
+ * A question asked more than once without record context: no profile record can be chosen
+ * for each copy, so it maps to nothing and has no key. Saved mappings and the matcher are
+ * not consulted (either would give every copy the same, primary value), and it cannot be
+ * taught or approved.
+ */
+function mapRepeatedQuestion(field: FormField): FieldMapping {
+  return {
+    fieldId: field.id,
+    status: 'unsupported',
+    source: 'automatic',
+    unsupportedReason: 'repeated-question',
+    confidence: { score: 0, level: 'unknown', reasons: [] },
+  };
 }
 
 /** Primary-record fields in a repeated section fill as before; other records need approval. */

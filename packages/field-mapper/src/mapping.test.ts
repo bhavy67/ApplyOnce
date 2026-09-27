@@ -580,12 +580,83 @@ describe('Phase 8: repeated questions', () => {
     expect(mapOne(repeated)).toMatchObject({
       status: 'unsupported',
       unsupportedReason: 'repeated-question',
-      profileField: 'current_title',
     });
+    // Phase 12: no profile target is shown, since no record can be chosen for each copy.
+    expect(mapOne(repeated)?.profileField).toBeUndefined();
+    expect(mapOne(repeated)?.mappingKey).toBeUndefined();
   });
 
   it('keeps a field without a generated id teachable through its question', () => {
     const workday = field('text', { label: 'Preferred Office Location', name: undefined });
     expect(mapOne(workday)?.mappingKey).toBe('v1|text|q=preferred office location|c=|i=');
+  });
+});
+
+describe('Phase 12: repeated questions without record context', () => {
+  const now = '2026-09-26T00:00:00.000Z';
+  const savedFor = (f: FormField, profileField: SavedMapping['profileField']) => {
+    const parts = createMappingKeyParts(f);
+    const key = createMappingKey(f);
+    if (!parts || !key) throw new Error('field has no key');
+    return new Map([[key, { key, parts, profileField, createdAt: now, updatedAt: now }]]);
+  };
+
+  it('maps a single question normally, with its key, aliases, and saved mappings', () => {
+    const degree = field('text', { label: 'Degree' });
+    expect(mapOne(degree)).toMatchObject({ status: 'mapped', profileField: 'highest_degree' });
+    expect(mapOne(field('text', { label: 'Company' }))).toMatchObject({
+      status: 'review',
+      profileField: 'current_company',
+    });
+    const institution = field('text', { label: 'Institution' });
+    expect(
+      mapFields([institution], matcher, savedFor(institution, 'institution')).mappings[0],
+    ).toMatchObject({
+      status: 'taught',
+      profileField: 'institution',
+    });
+  });
+
+  it('gives a repeated question no target, no key, and never High confidence', () => {
+    const repeated = { ...field('text', { label: 'Degree' }), repeatedCount: 2 };
+    const mapping = mapOne(repeated);
+    expect(mapping).toEqual({
+      fieldId: repeated.id,
+      status: 'unsupported',
+      source: 'automatic',
+      unsupportedReason: 'repeated-question',
+      confidence: { score: 0, level: 'unknown', reasons: [] },
+    });
+  });
+
+  it('never applies a saved mapping to a repeated question', () => {
+    const single = field('text', { label: 'Institution' });
+    const saved = savedFor(single, 'institution');
+    const repeated = { ...field('text', { label: 'Institution' }), repeatedCount: 2 };
+    expect(mapFields([repeated], matcher, saved).mappings[0]).toMatchObject({
+      status: 'unsupported',
+      source: 'automatic',
+      unsupportedReason: 'repeated-question',
+    });
+    expect(mapFields([repeated], matcher, saved).mappings[0]?.profileField).toBeUndefined();
+  });
+
+  it('cannot be taught: no key for a repeated question (known or unknown)', () => {
+    for (const label of ['Degree', 'Preferred Working Location']) {
+      const repeated = { ...field('text', { label }), repeatedCount: 3 };
+      expect(createMappingKeyParts(repeated)).toBeUndefined();
+      expect(mapOne(repeated)?.mappingKey).toBeUndefined();
+    }
+  });
+
+  it('keeps record-section fields on their record even when their question repeats', () => {
+    const inRecord = {
+      ...field('text', { label: 'Degree' }),
+      record: { collection: 'education' as const, index: 1 },
+    };
+    expect(mapOne(inRecord)).toMatchObject({
+      status: 'review',
+      profileField: 'education[1].degree',
+    });
   });
 });

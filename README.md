@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 11 — Repeatable application sections: complete.**
+**Phase 12 — Generic repeated-field safety: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -40,6 +40,9 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 11: repeated application sections ("Education 1/2/3", "Work Experience 1/2",
   "Certification 1/2") are recognised, and each block's fields map to the profile record at
   the same position. See [Repeated application sections](#repeated-application-sections).
+- Phase 12: a question asked more than once without record context (e.g. two "Degree"
+  fields under one "Education" heading) is never filled, on generic pages as on Workday. See
+  [Repeated questions](#repeated-questions-without-record-context).
 
 Nothing is ever submitted. Greenhouse gets dedicated support in a later phase; until then
 it is handled by the generic adapter.
@@ -255,8 +258,36 @@ certification blocks) is recognised when Analyze scans it, on generic pages and 
   add a block, click **Analyze again**: sections are found on each scan (there is no
   continuous page observation).
 - **Unsupported:** a single block (it maps as before), blocks without a record heading
-  (repeated fields inside one headed section stay unsupported on Workday), headings with other
-  wording, date pickers / `type="month"` inputs, and choosing records by content.
+  (their repeated questions are never filled, see below), headings with other wording, date
+  pickers / `type="month"` inputs, and choosing records by content.
+
+### Repeated questions without record context
+
+**ApplyOnce does not automatically assign repeated identical fields to different profile
+records unless a recognized record context exists.** A recognized repeated section
+("Education 1", "Education 2", …, above) is record context; page position alone is not: the
+second "Degree" on a page may be a second degree, a duplicate, or something else entirely, and
+guessing would put one record's value (usually the primary one) into several fields.
+
+- **What counts as repeated.** Visible fields in the same form (fields outside any form share
+  one scope) whose question is the same after the usual normalization: label, else
+  aria-label, placeholder, or nearby text, ignoring case, spacing, punctuation, and
+  required/optional markers ("Degree *" = "Degree (required)"). A fieldset legend is part
+  of the question, so "Phone" under "Home" and under "Work" differ; plain headings are not.
+  Fields without a question compare by name/id. Different questions that share a word
+  ("Education level" / "Education preferences", "Current Company" / "Previous Company") are
+  not repeated. The control type does not matter: a question asked twice is ambiguous
+  whether it is a text box or a dropdown. The same question in two separate forms is two
+  independent questions. Hidden copies are not counted.
+- **What happens.** Each copy is shown as "Repeated question · no record context" and "Asked
+  more than once, and ApplyOnce can't tell which profile record each one is for. Will not be
+  filled." It has no profile target, is never selected, cannot be selected or taught, and
+  saved mappings for the same question are not applied to it (they keep working wherever the
+  question appears once). Other fields fill normally.
+- **At fill time** the page is scanned again: a field that has become repeated since Analyze
+  is skipped ("This question now appears more than once on the page. Analyze again."); one
+  that stopped being repeated is filled only after a new Analyze and approval.
+- **Generic pages and Workday** use the same rule (in the generic scanner).
 
 ### Migration
 
@@ -596,7 +627,8 @@ Tenants on their own domains are recognised by the page containers.
   [Search fields](#search-fields-workday-autocomplete);
 - headed record blocks ("Work Experience 1", "Work Experience 2", …) are repeated sections
   (see [Repeated application sections](#repeated-application-sections)); any other question
-  that appears more than once on the step is marked repeated and never filled. A single
+  that appears more than once on the step is repeated without record context and never
+  filled (see [Repeated questions](#repeated-questions-without-record-context)). A single
   section's fields fill normally.
 
 **Supported controls:** text-like inputs, native selects, radio groups, single checkboxes,

@@ -1,6 +1,5 @@
 import type { FormField } from '@applyonce/core';
 import { scanControls, type ScannedField, type ScanOptions } from '@applyonce/adapter-generic';
-import { createMappingKey } from '@applyonce/field-mapper';
 import {
   APPLICATION_SCOPE,
   AUTOMATION_ID,
@@ -25,8 +24,8 @@ const TEXT_LIKE = new Set(['text', 'email', 'tel', 'number', 'textarea']);
  * 4. Search-as-you-type inputs (aria-autocomplete list/both) are one text field with the
  *    "search-input" pattern, filled by search-input.ts; they are supported only when they
  *    declare a popup relationship, otherwise reported as unsupported.
- * 5. A question asked several times on the step (repeated record sections such as work
- *    experience) is marked repeated, and is therefore never filled.
+ * 5. Repeated record sections and questions asked several times without record context
+ *    are handled by the generic scanner (shared with generic pages).
  */
 export function scanWorkday(root: ParentNode): ScannedField[] {
   const scope = root.querySelector(byAutomationId(APPLICATION_SCOPE)) ?? root;
@@ -42,8 +41,7 @@ const CHROME_SELECTOR = CHROME_CONTAINERS.map(byAutomationId).join(', ');
 const WORKDAY_SCAN_OPTIONS: ScanOptions = {
   exclude: (element) => element.closest(CHROME_SELECTOR) !== null,
   stableIdentity: (element) => element.getAttribute(AUTOMATION_ID) || undefined,
-  postProcess: (scanned) =>
-    markRepeatedQuestions(dropHiddenHelpers(scanned).map(dropGeneratedId).map(markSearchInput)),
+  postProcess: (scanned) => dropHiddenHelpers(scanned).map(dropGeneratedId).map(markSearchInput),
 };
 
 function dropGeneratedId(entry: ScannedField): ScannedField {
@@ -93,18 +91,4 @@ function dropHiddenHelpers(scanned: ScannedField[]): ScannedField[] {
       containersWithVisibleField.has(container);
     return !isHelper;
   });
-}
-
-function markRepeatedQuestions(scanned: ScannedField[]): ScannedField[] {
-  const counts = new Map<string, number>();
-  const keyOf = (field: FormField) => (field.visible ? createMappingKey(field) : undefined);
-  for (const { field } of scanned) {
-    const key = keyOf(field);
-    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  for (const { field } of scanned) {
-    const count = counts.get(keyOf(field) ?? '') ?? 1;
-    if (count > 1) field.repeatedCount = count;
-  }
-  return scanned;
 }
