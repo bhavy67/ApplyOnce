@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 5 — Expanded job application profile: complete.**
+**Phase 6 — Generic form robustness: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -22,6 +22,9 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 5: the profile covers the fields job applications commonly ask for (current job,
   work mode, employment type, education, website), all mapped, filled, and teachable
   through one set of canonical field definitions. Older profiles are migrated safely.
+- Phase 6: more reliable on real-world generic forms: wrapper labels, required markers,
+  checkbox groups, read-only fields, stricter existing-value protection, and verified with
+  plain HTML, React, Vue, and Angular forms. A stale background service is detected.
 
 Nothing is ever submitted. Generic HTML forms only; Workday and Greenhouse get dedicated support in later phases.
 
@@ -87,12 +90,15 @@ pnpm install
 3. **Load unpacked** → select `apps/chrome-extension/dist`.
 4. Click the ApplyOnce toolbar icon.
 
-After every rebuild, press the reload icon on the extension card. This matters: when files
-change on disk, Chrome can keep running the **previous** service worker code, even across a
-browser restart, until the extension is reloaded. Pages and the popup then run new code
-while the service worker runs old code. For example, after the Phase 5 upgrade an old
-service worker refuses the migrated (version 2) profile, and the popup says "Your profile
-could not be loaded" until you reload. No data is lost; reloading fixes it.
+After every rebuild, press the reload icon on the extension card. When files change on
+disk, Chrome can keep running the **previous** service worker code, even across a browser
+restart, until the extension is reloaded, so the popup and the service worker would run
+different builds. Since Phase 6 the popup detects this before doing anything: each build
+has a build id (`<version>+<build time>`) compiled into both, and Analyze first asks the
+service worker for its id. If it differs, or the worker is too old to answer, the popup
+shows **"ApplyOnce was updated. Reload the extension (chrome://extensions → reload) and try
+again."** and touches nothing. An unresponsive worker gets its own "not responding"
+message. ApplyOnce never restarts itself.
 
 ## The profile
 
@@ -301,17 +307,82 @@ since been deleted or changed is refused.
 
 - Text-like fields: the value is written with the element's native setter, then `input` and
   `change` events are dispatched, so React, Vue, Angular and plain listeners see the change.
-  Fields that already have a value are **skipped**, never overwritten.
+  Fields that already have a value (anything but whitespace) are **skipped**, never
+  overwritten.
 - Select and radio: matched by exact option value, then normalized value, then normalized
   label, then value or label ignoring spaces and punctuation ("onsite" = "On-site"). Always
   whole-text equality: "Remote / Hybrid" is not "remote". No match or several matches means
   **failed**, and the selection is left alone.
-- Checkbox: set from yes/no values with a real `click()`. Radio group: the one option that
-  matches is clicked (booleans match Yes/No options).
+- Checkbox: an unchecked box is checked with a real `click()` when your profile says yes.
+  A checked box is never unchecked. Radio group: the one option that matches is clicked
+  (booleans match Yes/No options), but never when an option is already chosen.
+- Selects keep an existing choice: a non-empty option that is not the first one, or that the
+  page marked `selected`, counts as a value. Empty placeholder, disabled, and hidden options
+  are never chosen.
+- Read-only, hidden, and disabled fields are skipped. Off-screen fields are filled (being
+  outside the viewport does not make a field invalid).
 - Before filling, the page is scanned again and each field is located by its deterministic
   id and checked against its metadata from analysis. A removed or replaced field is
   **not found**; the others are still filled.
 - Filling never submits, clicks buttons, or touches fields that were not approved.
+
+## Generic form compatibility
+
+What the generic adapter handles, and how. Everything is deterministic; nothing is
+inferred by similarity.
+
+**Labels.** In order: `<label for>` and wrapping `<label>`, then `aria-labelledby` (several
+ids joined in order), then a **wrapper label**: a `<label>` without `for` in the smallest
+wrapper (at most three levels up, never past a form, fieldset, or body) that contains only
+this field and exactly one such label, as in
+`<div><label>First name</label><div><input></div></div>`. A wrapper with another field in
+it ends the search, so a label is never taken from a neighbour. Text marked
+`aria-hidden="true"` (decorative asterisks) is ignored. `aria-label`, placeholder,
+`autocomplete`, and fieldset legend or preceding text are also read, as before.
+
+**Question normalization.** Case, whitespace, and punctuation are ignored, and required or
+optional markers are removed: "First Name _", "_ First Name", "First Name (required)",
+"First Name - required", and "First Name [optional]" are all "first name". Only marked
+forms are removed, so "Is sponsorship required?" keeps its last word. Different wordings
+are equivalent only through explicit aliases ("LinkedIn", "LinkedIn URL", "LinkedIn
+Profile").
+
+**Autocomplete** tokens map only to canonical profile fields: `given-name`,
+`additional-name`, `family-name`, `name`, `email`, `tel`, `tel-national`,
+`street-address`, `address-line1`, `address-level2`, `address-level1`, `postal-code`,
+`country`, `country-name`, `organization`, `organization-title` (section and
+shipping/billing prefixes are ignored). Any other token (e.g. `off`, `url`, `bday`,
+`cc-number`) is not evidence.
+
+**Radio groups** are grouped by `name` within a form; the question comes from the fieldset
+legend, a `role="radiogroup"` label, or preceding text. Two groups are never merged because
+their labels look alike.
+
+**Checkboxes.** A single checkbox is a yes/no field. Checkboxes that share a `name` in the
+same form are a **multi-option group** ("Preferred locations: ☐ Ahmedabad ☐ Mumbai"). The
+profile holds single values only, so group options are never filled or taught: they show
+"One option of a multi-choice group" (or "No safe match") and stay untouched.
+
+**Rich text / `contenteditable`: not supported.** Editors built on `contenteditable`
+(ProseMirror, Draft.js, Quill, Slate, …) keep their own document model; writing DOM text
+behind their back can be ignored or corrupt their state, and the only broadly understood
+insertion path (`execCommand('insertText')`) needs focus and moves the page's selection.
+That cannot be made safe and deterministic generically, so these regions are not detected.
+
+**Dynamic pages.** There is no background observer. Analyze captures the page as it is now;
+after the page changes (fields appear, disappear, or re-render), click **Analyze again**:
+the review is rebuilt from scratch (removed fields disappear, new ones appear, mappings
+and saved mappings are re-applied, and no earlier approval carries over). Fill always
+re-scans first: a re-rendered equivalent element is filled, a removed or changed one is
+reported as not found.
+
+**Verified in real Chrome** (Chrome 153, fake data) with the same form in plain HTML, React
+19 (controlled inputs), Vue 3.5 (`v-model`), and Angular 22 (`[(ngModel)]`, zoneless):
+Analyze leaves page and framework state unchanged; Fill updates the visible value and the
+framework's state (text, email, tel, number, URL, select, radio, checkbox); existing values
+are kept; review, unknown, and checkbox-group fields stay untouched; removed and
+re-rendered fields are handled; a field added later is found by Analyze again. The adapter
+uses only standard DOM behavior, with no framework-specific code.
 
 ## How the packages are built
 
@@ -353,8 +424,10 @@ single classic script, because MV3 content scripts cannot be ES modules.
 - Editing `legacy` values carried over by migration (they are read-only)
 - Scoping saved mappings to a site, similarity-based matching of saved mappings, and
   mapping edits from the management view (delete and re-teach instead)
-- Continuous DOM observation (MutationObserver), iframes, shadow DOM, custom widgets,
-  date pickers, file uploads
+- Continuous DOM observation (MutationObserver), iframes, shadow DOM, custom widgets
+  (custom dropdowns, comboboxes), date pickers, file uploads
+- `contenteditable` / rich-text fields (see Generic form compatibility)
+- Multi-option checkbox groups (the profile has no multi-value fields)
 - Profile completeness checks
 - Editing work history, documents, and custom answers in the UI
 - Encryption at rest of the local profile

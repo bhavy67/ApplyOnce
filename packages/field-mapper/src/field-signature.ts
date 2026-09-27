@@ -1,5 +1,5 @@
 import type { FieldType, FormField } from '@applyonce/core';
-import { normalizeText } from './normalize';
+import { normalizeQuestion, normalizeText } from './normalize';
 
 /**
  * Normalized view of a form field's signals: the input to matching and to the saved
@@ -23,25 +23,36 @@ export interface FieldSignature {
   autocomplete?: string;
 }
 
-export function createFieldSignature(field: FormField): FieldSignature {
+/**
+ * Questions (label, aria-label, placeholder, nearby text) are normalized without
+ * required/optional markers; identifiers are normalized as they are.
+ */
+export function createFieldSignature(
+  field: FormField,
+  normalizeQuestionText: (text: string) => string = normalizeQuestion,
+): FieldSignature {
   const { signals } = field;
+  const question = (value: string | undefined) => normalizeOptional(value, normalizeQuestionText);
   return {
     fieldType: field.type,
     name: normalizeOptional(signals.name),
     htmlId: normalizeOptional(signals.htmlId),
     nameTail: identifierTail(signals.name),
     idTail: identifierTail(signals.htmlId),
-    label: normalizeOptional(signals.label),
-    ariaLabel: normalizeOptional(signals.ariaLabel),
-    placeholder: normalizeOptional(signals.placeholder),
-    nearbyText: normalizeOptional(signals.nearbyText),
+    label: question(signals.label),
+    ariaLabel: question(signals.ariaLabel),
+    placeholder: question(signals.placeholder),
+    nearbyText: question(signals.nearbyText),
     autocomplete: signals.autocomplete?.trim().toLowerCase().split(/\s+/).at(-1) || undefined,
   };
 }
 
-function normalizeOptional(value: string | undefined): string | undefined {
+function normalizeOptional(
+  value: string | undefined,
+  normalize: (text: string) => string = normalizeText,
+): string | undefined {
   if (value === undefined) return undefined;
-  return normalizeText(value) || undefined;
+  return normalize(value) || undefined;
 }
 
 /** Only set when the identifier is structured (has [ ] . : or / separators). */

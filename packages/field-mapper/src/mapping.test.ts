@@ -6,6 +6,8 @@ import {
   createMappingKey,
   createMappingKeyParts,
   mapFields,
+  mappingKeyCandidates,
+  normalizeQuestion,
 } from './index';
 
 let nextId = 0;
@@ -342,5 +344,142 @@ describe('Phase 5: job application fields', () => {
     expect(mapOne(field('checkbox', { label: 'Subscribe to relocation newsletter' }))?.status).toBe(
       'unknown',
     );
+  });
+});
+
+describe('Phase 6: question normalization', () => {
+  it.each([
+    'First Name',
+    'First name',
+    'FIRST NAME',
+    ' first   name ',
+    'First Name *',
+    '* First Name',
+    'First Name (required)',
+    'First Name - required',
+    'First Name — Required',
+    'First Name [optional]',
+    'First Name *(required)',
+  ])('%j normalizes to "first name"', (text) => {
+    expect(normalizeQuestion(text)).toBe('first name');
+  });
+
+  it.each([
+    ['Is sponsorship required?', 'is sponsorship required'],
+    ['Required documents', 'required documents'],
+    ['Optional extras', 'optional extras'],
+  ])('keeps "required"/"optional" when it is part of the question: %j', (text, expected) => {
+    expect(normalizeQuestion(text)).toBe(expected);
+  });
+
+  it.each(['First Name (required)', 'First Name - required', 'First Name *'])(
+    'maps %j like "First Name"',
+    (label) => {
+      expect(mapOne(field('text', { label }))).toMatchObject({
+        status: 'mapped',
+        profileField: 'first_name',
+      });
+    },
+  );
+
+  it.each(['LinkedIn', 'LinkedIn URL', 'LinkedIn Profile', 'LinkedIn profile URL *'])(
+    'treats explicit LinkedIn aliases alike: %j',
+    (label) => {
+      expect(mapOne(field('text', { label }))?.profileField).toBe('linkedin_url');
+    },
+  );
+
+  it('does not equate merely similar questions', () => {
+    expect(mapOne(field('text', { label: 'LinkedIn connections' }))?.status).not.toBe('mapped');
+    expect(mapOne(field('text', { label: 'Your first name please' }))?.status).not.toBe('mapped');
+  });
+});
+
+describe('Phase 6: autocomplete', () => {
+  it.each([
+    ['given-name', 'first_name'],
+    ['family-name', 'last_name'],
+    ['additional-name', 'middle_name'],
+    ['name', 'full_name'],
+    ['email', 'email'],
+    ['tel', 'phone'],
+    ['street-address', 'address'],
+    ['address-line1', 'address'],
+    ['address-level2', 'city'],
+    ['address-level1', 'state'],
+    ['postal-code', 'postal_code'],
+    ['country', 'country'],
+    ['country-name', 'country'],
+    ['organization', 'current_company'],
+    ['organization-title', 'current_title'],
+    ['section-apply shipping postal-code', 'postal_code'],
+  ])('autocomplete %j alone → %s with high confidence', (autocomplete, profileField) => {
+    const type = profileField === 'email' ? 'email' : profileField === 'phone' ? 'tel' : 'text';
+    expect(mapOne(field(type, { autocomplete }))).toMatchObject({ status: 'mapped', profileField });
+  });
+
+  it.each(['off', 'on', 'new-password', 'cc-number', 'bday', 'url', 'username', 'one-time-code'])(
+    'ignores tokens that are not canonical profile fields: %j',
+    (autocomplete) => {
+      expect(mapOne(field('text', { autocomplete }))?.status).toBe('unknown');
+    },
+  );
+});
+
+describe('Phase 6: unsupported states and backward-compatible keys', () => {
+  it('never fills a checkbox that belongs to a multi-option group', () => {
+    const grouped = {
+      ...field('checkbox', { label: 'Willing to relocate', name: 'prefs' }),
+      groupSize: 3,
+    };
+    expect(mapOne(grouped)).toMatchObject({
+      status: 'unsupported',
+      unsupportedReason: 'checkbox-group',
+    });
+  });
+
+  it('keeps unknown checkbox group options unknown', () => {
+    const option = {
+      ...field('checkbox', { label: 'Mumbai', name: 'loc', nearbyText: 'Preferred locations' }),
+      groupSize: 3,
+    };
+    expect(mapOne(option)?.status).toBe('unknown');
+  });
+
+  it('marks read-only fields unsupported', () => {
+    const readOnly = { ...field('text', { label: 'City' }), readOnly: true };
+    expect(mapOne(readOnly)).toMatchObject({
+      status: 'unsupported',
+      unsupportedReason: 'readonly',
+    });
+  });
+
+  it('still applies mappings taught before required markers were stripped', () => {
+    const f = field('text', { label: 'Start date (required)' });
+    const legacyKey = 'v1|text|q=start date required|c=|i=';
+    expect(mappingKeyCandidates(f)).toEqual(['v1|text|q=start date|c=|i=', legacyKey]);
+    const saved = new Map([
+      [
+        legacyKey,
+        {
+          key: legacyKey,
+          parts: { fieldType: 'text' as const, question: 'start date required' },
+          profileField: 'notice_period' as const,
+          createdAt: 'x',
+          updatedAt: 'x',
+        },
+      ],
+    ]);
+    expect(mapFields([f], matcher, saved).mappings[0]).toMatchObject({
+      status: 'taught',
+      profileField: 'notice_period',
+      mappingKey: 'v1|text|q=start date|c=|i=',
+    });
+  });
+
+  it('does not change keys for questions without markers', () => {
+    expect(mappingKeyCandidates(field('text', { label: 'Preferred Working Location *' }))).toEqual([
+      'v1|text|q=preferred working location|c=|i=',
+    ]);
   });
 });

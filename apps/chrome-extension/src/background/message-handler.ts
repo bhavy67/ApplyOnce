@@ -16,6 +16,7 @@ import {
   isProfileFieldKey,
   type Profile,
 } from '@applyonce/profile';
+import { BUILD_ID } from '../build-info';
 import { logFailure } from '../log-failure';
 import {
   fail,
@@ -144,6 +145,9 @@ export function createServiceWorkerMessageHandler({
           return mapping ? ok({ mapping }) : fail('internal-error');
         }
 
+        case MessageType.GetRuntimeInfo:
+          return ok({ buildId: BUILD_ID });
+
         case MessageType.ListMappings:
           return ok({ mappings: await savedMappings.list() });
 
@@ -172,6 +176,7 @@ const MESSAGE_TYPES_FOR_WORKER: ReadonlySet<string> = new Set([
   MessageType.GetProfileStatus,
   MessageType.MapFields,
   MessageType.FillPage,
+  MessageType.GetRuntimeInfo,
   ...MAPPING_MESSAGES,
 ]);
 

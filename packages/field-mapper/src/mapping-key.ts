@@ -1,5 +1,6 @@
 import type { FormField, MappingKeyParts } from '@applyonce/core';
 import { createFieldSignature } from './field-signature';
+import { normalizeText } from './normalize';
 
 /** Bump when the key format changes; older saved mappings then simply stop matching. */
 const KEY_VERSION = 'v1';
@@ -21,8 +22,11 @@ const KEY_VERSION = 'v1';
  *
  * Returns undefined when the field has none of these, so it cannot be taught.
  */
-export function createMappingKeyParts(field: FormField): MappingKeyParts | undefined {
-  const signature = createFieldSignature(field);
+export function createMappingKeyParts(
+  field: FormField,
+  normalizeQuestionText?: (text: string) => string,
+): MappingKeyParts | undefined {
+  const signature = createFieldSignature(field, normalizeQuestionText);
   const ownLabel = signature.label ?? signature.ariaLabel;
   const question = ownLabel ?? signature.placeholder ?? signature.nearbyText;
   if (question) {
@@ -47,4 +51,17 @@ export function mappingKeyFromParts(parts: MappingKeyParts): string {
 export function createMappingKey(field: FormField): string | undefined {
   const parts = createMappingKeyParts(field);
   return parts && mappingKeyFromParts(parts);
+}
+
+/**
+ * Keys to look a saved mapping up by: the current key first, then the key the same field
+ * had before required/optional markers were removed from questions (Phase 6), so mappings
+ * taught earlier on labels such as "Start date (required)" keep working.
+ */
+export function mappingKeyCandidates(field: FormField): string[] {
+  const current = createMappingKey(field);
+  if (!current) return [];
+  const legacyParts = createMappingKeyParts(field, normalizeText);
+  const legacy = legacyParts && mappingKeyFromParts(legacyParts);
+  return legacy && legacy !== current ? [current, legacy] : [current];
 }

@@ -254,3 +254,126 @@ describe('genericAdapter', () => {
     expect(fields.map((f) => f.signals.label)).toEqual(['Email']);
   });
 });
+
+describe('Phase 6: label association', () => {
+  it.each([
+    ['nested text', '<label for="f"><span><b>First</b> name</span></label><input id="f">'],
+    ['extra whitespace', '<label for="f">\n   First\n   name   </label><input id="f">'],
+    [
+      'decorative marker hidden from assistive technology',
+      '<label for="f">First name <span aria-hidden="true">*</span></label><input id="f">',
+    ],
+    [
+      'wrapper label without for',
+      '<div class="field"><label>First name</label><div><input id="f"></div></div>',
+    ],
+    [
+      'wrapper label two levels up',
+      '<div><div><label>First name</label></div><div><span><input id="f"></span></div></div>',
+    ],
+  ])('reads the label from %s', (_, html) => {
+    expect(only(html).signals.label).toBe('First name');
+  });
+
+  it('joins aria-labelledby references in order', () => {
+    const field = only(
+      '<span id="a">Emergency contact</span><span id="b">Phone</span><input aria-labelledby="a b">',
+    );
+    expect(field.signals.label).toBe('Emergency contact Phone');
+  });
+
+  it('prefers <label for> and aria-labelledby over a wrapper label', () => {
+    const field = only(
+      '<div><label>Wrapper</label><span id="l">Explicit</span><input aria-labelledby="l"></div>',
+    );
+    expect(field.signals.label).toBe('Explicit');
+  });
+
+  it('never takes a wrapper label from a wrapper with several fields', () => {
+    const fields = scan(`
+      <div class="row"><label>First name</label><input name="a"><input name="b"></div>
+    `);
+    expect(fields.map((f) => f.signals.label)).toEqual([undefined, undefined]);
+  });
+
+  it('never takes a label that belongs to another field', () => {
+    const fields = scan(
+      '<div><label for="other">City</label><input name="mine"></div><input id="other">',
+    );
+    expect(fields[0]?.signals.label).toBeUndefined();
+    expect(fields[1]?.signals.label).toBe('City');
+  });
+
+  it('never takes a wrapper label across a form or fieldset boundary', () => {
+    const field = only(
+      '<form><label>Form title</label><fieldset><div><input name="x"></div></fieldset></form>',
+    );
+    expect(field.signals.label).toBeUndefined();
+  });
+
+  it('keeps autocomplete for fields with no visible label', () => {
+    expect(only('<input autocomplete="given-name">').signals).toEqual({
+      autocomplete: 'given-name',
+    });
+  });
+});
+
+describe('Phase 6: groups and state', () => {
+  it('keeps several radio groups on one page separate, even with similar legends', () => {
+    const fields = scan(`
+      <fieldset><legend>Work mode</legend>
+        <label><input type="radio" name="mode" value="r"> Remote</label>
+        <label><input type="radio" name="mode" value="h"> Hybrid</label>
+        <label><input type="radio" name="mode" value="o"> On-site</label>
+      </fieldset>
+      <fieldset><legend>Work mode</legend>
+        <label><input type="radio" name="mode2" value="r"> Remote</label>
+        <label><input type="radio" name="mode2" value="o"> On-site</label>
+      </fieldset>
+      <div role="radiogroup" aria-label="Employment type">
+        <label><input type="radio" name="type" value="ft"> Full time</label>
+        <label><input type="radio" name="type" value="pt"> Part time</label>
+      </div>`);
+    expect(fields.map((f) => [f.id, f.signals.label, f.options?.length])).toEqual([
+      ['radio:mode', 'Work mode', 3],
+      ['radio:mode2', 'Work mode', 2],
+      ['radio:type', 'Employment type', 2],
+    ]);
+  });
+
+  it('records checkbox groups (same name) but not single checkboxes', () => {
+    const fields = scan(`
+      <fieldset><legend>Preferred locations</legend>
+        <label><input type="checkbox" name="loc" value="amd"> Ahmedabad</label>
+        <label><input type="checkbox" name="loc" value="bom"> Mumbai</label>
+        <label><input type="checkbox" name="loc" value="blr"> Bengaluru</label>
+      </fieldset>
+      <label><input type="checkbox" name="relocate"> Willing to relocate</label>
+      <label><input type="checkbox"> Unnamed</label>`);
+    expect(fields.map((f) => [f.signals.label, f.groupSize])).toEqual([
+      ['Ahmedabad', 3],
+      ['Mumbai', 3],
+      ['Bengaluru', 3],
+      ['Willing to relocate', undefined],
+      ['Unnamed', undefined],
+    ]);
+  });
+
+  it('records read-only fields', () => {
+    const fields = scan(
+      '<input name="a" readonly><textarea name="b" aria-readonly="true"></textarea><input name="c">',
+    );
+    expect(fields.map((f) => f.readOnly)).toEqual([true, true, undefined]);
+  });
+
+  it('treats off-screen and transparent fields as visible', () => {
+    const fields = scan(`
+      <input name="offscreen" style="position:absolute; left:-10000px">
+      <input name="transparent" style="opacity:0">`);
+    expect(fields.map((f) => f.visible)).toEqual([true, true]);
+  });
+
+  it('does not detect contenteditable regions (unsupported, see README)', () => {
+    expect(scan('<div contenteditable="true" aria-label="Cover letter"></div>')).toEqual([]);
+  });
+});

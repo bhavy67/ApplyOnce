@@ -1,4 +1,5 @@
 import react from '@vitejs/plugin-react';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
@@ -8,8 +9,16 @@ import { defineConfig } from 'vite';
  * The content script has its own config because MV3 content scripts cannot be modules.
  * `dist/` is cleaned by the package scripts, since both builds write into it.
  */
+const { version } = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, 'package.json'), 'utf8'),
+) as { version: string };
+
+/** One id per build, shared by the popup and service worker (see src/build-info.ts). */
+const BUILD_ID = `${version}+${Date.now().toString(36)}`;
+
 export default defineConfig({
   plugins: [react()],
+  define: { __APPLYONCE_BUILD_ID__: JSON.stringify(BUILD_ID) },
   build: {
     outDir: 'dist',
     emptyOutDir: false,

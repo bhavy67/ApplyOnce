@@ -43,6 +43,7 @@ function fillOne(target: ScannedField | undefined, { value, expected }: FillInst
   const { field, controls } = target;
   if (!field.visible) return skipped('The field is hidden now.');
   if (field.disabled) return skipped('The field is disabled now.');
+  if (field.readOnly) return skipped('The field is read-only.');
 
   switch (field.type) {
     case 'text':
@@ -84,7 +85,11 @@ function fillText(control: TextControl, type: FormField['type'], value: FillValu
 }
 
 function fillSelect(select: HTMLSelectElement, value: FillValue): Outcome {
-  const options = Array.from(select.options).filter((option) => !option.disabled);
+  if (hasSelection(select)) return skipped('The field already has a value.');
+  // Never choose options the user cannot choose: disabled, hidden, or empty placeholders.
+  const options = Array.from(select.options).filter(
+    (option) => !option.disabled && !option.hidden && option.value.trim() !== '',
+  );
   const match = findMatchingOption(options, (o) => ({ value: o.value, label: o.text }), value);
   if (match === 'ambiguous') return failed('More than one option matches.');
   if (!match) return failed('No option matches your profile value.');
@@ -98,10 +103,16 @@ function fillSelect(select: HTMLSelectElement, value: FillValue): Outcome {
 function fillCheckbox(checkbox: HTMLInputElement, value: FillValue): Outcome {
   const checked = toBoolean(value);
   if (checked === undefined) return failed('The value is not a yes/no value.');
+  // A checked box is an existing answer: it is never unchecked. An unchecked box that
+  // should stay unchecked needs no change.
+  if (checkbox.checked) {
+    return checked ? skipped(ALREADY_MATCHES) : skipped('The field already has a value.');
+  }
+  if (!checked) return skipped(ALREADY_MATCHES);
   // click() toggles the box and fires click/input/change, which is what frameworks
   // listen to for checkboxes and radios.
-  if (checkbox.checked !== checked) checkbox.click();
-  return checkbox.checked === checked ? filled() : failed('The page did not accept the change.');
+  checkbox.click();
+  return checkbox.checked ? filled() : failed('The page did not accept the change.');
 }
 
 function fillRadio(
@@ -119,7 +130,10 @@ function fillRadio(
   if (match === 'ambiguous') return failed('More than one option matches.');
   if (!match) return failed('No option matches your profile value.');
 
-  if (!match.radio.checked) match.radio.click();
+  // An already chosen option is an existing answer: never switch it.
+  if (match.radio.checked) return skipped(ALREADY_MATCHES);
+  if (radios.some((radio) => radio.checked)) return skipped('The field already has a value.');
+  match.radio.click();
   return match.radio.checked ? filled() : failed('The page did not accept the selection.');
 }
 
@@ -185,6 +199,22 @@ function setValueWithNativeSetter(control: TextControl, value: string) {
 function notifyChange(control: FormControl) {
   control.dispatchEvent(new Event('input', { bubbles: true }));
   control.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+const ALREADY_MATCHES = 'The field already matches your profile.';
+
+/**
+ * Whether a select already has a chosen value. An empty-valued option (a placeholder) is no
+ * value. A non-empty option counts when it is not the first option, or when the page marked
+ * it as selected; a select that is simply showing its first option has no choice yet.
+ */
+function hasSelection(select: HTMLSelectElement): boolean {
+  return Array.from(select.options).some(
+    (option, index) =>
+      option.selected &&
+      option.value.trim() !== '' &&
+      (index > 0 || option.hasAttribute('selected')),
+  );
 }
 
 const filled = (): Outcome => ({ status: 'filled', message: 'Filled.' });

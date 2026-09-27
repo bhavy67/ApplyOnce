@@ -131,21 +131,29 @@ describe('checkbox', () => {
     document.body.innerHTML = '<label><input id="c" type="checkbox"> Willing to relocate</label>';
   });
 
-  it.each([
-    [true, true],
-    ['yes', true],
-    [false, false],
-  ] as const)('%j → checked=%s', (value, checked) => {
+  it.each([true, 'yes'] as const)('%j checks an unchecked box', (value) => {
     expect(fillOne('id:c', value)).toMatchObject({ status: 'filled' });
-    expect(input('#c').checked).toBe(checked);
+    expect(input('#c').checked).toBe(true);
   });
 
-  it('unchecks a checked box for false and fires change', () => {
+  it('leaves an unchecked box alone for false (it already matches)', () => {
+    expect(fillOne('id:c', false)).toMatchObject({ status: 'skipped' });
+    expect(input('#c').checked).toBe(false);
+  });
+
+  it('never unchecks a checked box (an existing answer)', () => {
     input('#c').checked = true;
     const events = recordEvents('#c');
-    fillOne('id:c', false);
-    expect(input('#c').checked).toBe(false);
-    expect(events).toContain('change');
+    expect(fillOne('id:c', false)).toMatchObject({
+      status: 'skipped',
+      message: 'The field already has a value.',
+    });
+    expect(fillOne('id:c', true)).toMatchObject({
+      status: 'skipped',
+      message: 'The field already matches your profile.',
+    });
+    expect(input('#c').checked).toBe(true);
+    expect(events).toEqual([]);
   });
 
   it.each(['maybe', 3])('rejects non yes/no value %j', (value) => {
@@ -168,8 +176,19 @@ describe('radio', () => {
   it('selects only the option matching the profile value', () => {
     expect(fillOne('radio:sponsorship', false)).toMatchObject({ status: 'filled' });
     expect(checkedValues()).toEqual(['0']);
-    fillOne('radio:sponsorship', true);
-    expect(checkedValues()).toEqual(['1']);
+  });
+
+  it('never switches an already chosen option', () => {
+    fillOne('radio:sponsorship', false);
+    expect(fillOne('radio:sponsorship', true)).toMatchObject({
+      status: 'skipped',
+      message: 'The field already has a value.',
+    });
+    expect(fillOne('radio:sponsorship', false)).toMatchObject({
+      status: 'skipped',
+      message: 'The field already matches your profile.',
+    });
+    expect(checkedValues()).toEqual(['0']);
   });
 
   it('fails and selects nothing when no option matches', () => {
@@ -356,5 +375,145 @@ describe('Phase 5 value types', () => {
     const url = 'https://www.linkedin.com/in/jane-doe-example?trk=Profile_Link';
     expect(fillOne('id:u', url)).toMatchObject({ status: 'filled' });
     expect(input('#u').value).toBe(url);
+  });
+});
+
+describe('Phase 6: select option safety', () => {
+  const select = () => document.querySelector('#s') as HTMLSelectElement;
+  const html = (options: string) =>
+    `<select id="s"><option value="">Select…</option>${options}</select>`;
+
+  it.each([
+    [
+      'duplicate labels',
+      '<option value="a">Canada</option><option value="b">Canada</option>',
+      'Canada',
+    ],
+    [
+      'duplicate values',
+      '<option value="CA">Canada</option><option value="CA">Canada (CA)</option>',
+      'CA',
+    ],
+    [
+      'case-only differences',
+      '<option value="x">REMOTE</option><option value="y">remote</option>',
+      'Remote',
+    ],
+    [
+      'punctuation-only differences',
+      '<option value="x">On-site</option><option value="y">On site</option>',
+      'onsite',
+    ],
+  ])('fails safely on %s', (_, options, value) => {
+    document.body.innerHTML = html(options);
+    expect(fillOne('id:s', value)).toMatchObject({
+      status: 'failed',
+      message: 'More than one option matches.',
+    });
+    expect(select().value).toBe('');
+  });
+
+  it.each([
+    ['disabled options', '<option value="ca" disabled>Canada</option>'],
+    ['hidden options', '<option value="ca" hidden>Canada</option>'],
+    ['empty options', '<option value="">Canada</option>'],
+  ])('never selects %s', (_, options) => {
+    document.body.innerHTML = html(options);
+    expect(fillOne('id:s', 'Canada')).toMatchObject({ status: 'failed' });
+    expect(select().selectedIndex).toBe(0);
+  });
+
+  it('never matches the placeholder option', () => {
+    document.body.innerHTML = html('<option value="ca">Canada</option>');
+    expect(fillOne('id:s', 'Select…')).toMatchObject({ status: 'failed' });
+  });
+
+  it.each([
+    ['On-site', 'on-site'],
+    ['On site', 'onsite'],
+    ['on_site', 'onsite'],
+    ['ON SITE', 'onsite'],
+  ])('matches formatting variant %j for %j', (label, value) => {
+    document.body.innerHTML = html(
+      `<option value="o">${label}</option><option value="r">Remote</option>`,
+    );
+    expect(fillOne('id:s', value)).toMatchObject({ status: 'filled' });
+    expect(select().value).toBe('o');
+  });
+
+  it('does not overwrite an option the user already selected', () => {
+    document.body.innerHTML = html(
+      '<option value="ca">Canada</option><option value="in">India</option>',
+    );
+    // Set as a user would; happy-dom ignores the `selected` attribute in parsed HTML
+    // (the attribute case is verified in real Chrome).
+    select().value = 'in';
+    expect(fillOne('id:s', 'Canada')).toMatchObject({ status: 'skipped' });
+    expect(select().value).toBe('in');
+  });
+
+  it('treats a first option explicitly marked selected by the page as a value', () => {
+    document.body.innerHTML =
+      '<select id="s"><option value="ca">Canada</option><option value="in">India</option></select>';
+    select().options[0]?.setAttribute('selected', '');
+    expect(fillOne('id:s', 'India')).toMatchObject({ status: 'skipped' });
+  });
+
+  it('treats a select showing its first option by default as unset', () => {
+    document.body.innerHTML =
+      '<select id="s"><option value="ca">Canada</option><option value="in">India</option></select>';
+    expect(fillOne('id:s', 'India')).toMatchObject({ status: 'filled' });
+    expect(select().value).toBe('in');
+  });
+});
+
+describe('Phase 6: fill safety', () => {
+  it.each([
+    ['whitespace-only value', '<input id="f" value="   ">', 'filled'],
+    ['typed value', '<input id="f" value="Jane">', 'skipped'],
+    ['number value', '<input id="f" type="number" value="0">', 'skipped'],
+    ['textarea content', '<textarea id="f">Hello</textarea>', 'skipped'],
+  ])('%s → %s', (_, html, status) => {
+    document.body.innerHTML = html;
+    const value = html.includes('number') ? 3 : 'New';
+    expect(fillOne('id:f', value)).toMatchObject({ status });
+  });
+
+  it.each([
+    ['readonly', '<input id="f" readonly>'],
+    ['aria-readonly', '<input id="f" aria-readonly="true">'],
+    ['disabled', '<input id="f" disabled>'],
+    ['hidden', '<input id="f" hidden>'],
+    ['invisible', '<input id="f" style="visibility:hidden">'],
+  ])('skips a %s field', (_, html) => {
+    document.body.innerHTML = '<input id="f">';
+    const instruction = instructionFor('id:f', 'x');
+    document.body.innerHTML = html;
+    expect(fillFields(document, [instruction])[0]).toMatchObject({ status: 'skipped' });
+    expect(input('#f').value).toBe('');
+  });
+
+  it('fills a field that is positioned off-screen', () => {
+    document.body.innerHTML = '<input id="f" style="position:absolute; left:-9999px">';
+    expect(fillOne('id:f', 'x')).toMatchObject({ status: 'filled' });
+  });
+
+  it.each([
+    ['a changed type', '<input id="f" type="email">'],
+    ['a changed name', '<input id="f" name="other">'],
+  ])('reports a field with %s as not found', (_, html) => {
+    document.body.innerHTML = '<input id="f" name="first">';
+    const instruction = instructionFor('id:f', 'x');
+    document.body.innerHTML = html;
+    expect(fillFields(document, [instruction])[0]).toMatchObject({ status: 'not-found' });
+  });
+
+  it('finds a field added after analysis only through a new analysis', () => {
+    document.body.innerHTML = '<input id="a">';
+    const before = scanFields(document).map((f) => f.id);
+    document.body.insertAdjacentHTML('beforeend', '<input id="b">');
+    expect(before).toEqual(['id:a']);
+    expect(scanFields(document).map((f) => f.id)).toEqual(['id:a', 'id:b']);
+    expect(fillOne('id:b', 'B')).toMatchObject({ status: 'filled' });
   });
 });

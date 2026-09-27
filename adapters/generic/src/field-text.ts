@@ -10,12 +10,18 @@ export function cleanText(text: string | null | undefined): string | undefined {
   return cleaned || undefined;
 }
 
-/** Text of an element, excluding nested controls (so a wrapping label's select options are not included). */
+/**
+ * Text of an element, excluding nested controls (so a wrapping label's select options are
+ * not included) and decorative content hidden from assistive technology
+ * (`aria-hidden="true"`, e.g. a styled required asterisk).
+ */
 export function textOf(element: Element): string | undefined {
   const clone = element.cloneNode(true) as Element;
-  clone.querySelectorAll(`${CONTROL_SELECTOR}, button, script, style`).forEach((node) => {
-    node.remove();
-  });
+  clone
+    .querySelectorAll(`${CONTROL_SELECTOR}, button, script, style, [aria-hidden="true"]`)
+    .forEach((node) => {
+      node.remove();
+    });
   return cleanText(clone.textContent);
 }
 
@@ -39,6 +45,38 @@ export function labelText(
   const forLabels = control.id ? (labelsByFor.get(control.id) ?? []) : [];
   const labels = wrapping ? [wrapping, ...forLabels.filter((l) => l !== wrapping)] : forLabels;
   return cleanText(labels.map(textOf).filter(Boolean).join(' '));
+}
+
+/** How many ancestor levels a wrapper label may be found at. */
+const MAX_WRAPPER_DEPTH = 3;
+
+/** Controls that count as "another field" inside a wrapper (hidden inputs do not). */
+const FIELD_CONTROL_SELECTOR =
+  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea';
+
+/**
+ * A `<label>` without `for` that sits next to the control in a field wrapper, as in
+ * `<div class="field"><label>First name</label><div><input></div></div>`.
+ *
+ * Rule: walking up at most three levels (never past a form, fieldset, or body), the first
+ * wrapper that contains this control and no other field, and exactly one label without a
+ * `for` attribute that wraps no control, supplies the label. A wrapper containing another
+ * field ends the search, so a label is never taken from a neighbouring field.
+ */
+export function wrapperLabelText(control: Element): string | undefined {
+  let node = control.parentElement;
+  for (let depth = 0; node && depth < MAX_WRAPPER_DEPTH; depth += 1) {
+    if (node.matches('form, fieldset, body')) return undefined;
+    if (node.querySelectorAll(FIELD_CONTROL_SELECTOR).length > 1) return undefined;
+    const labels = Array.from(node.querySelectorAll('label')).filter(
+      (label) => !label.hasAttribute('for') && label.querySelector(CONTROL_SELECTOR) === null,
+    );
+    if (labels.length > 1) return undefined;
+    const [label] = labels;
+    if (label) return textOf(label);
+    node = node.parentElement;
+  }
+  return undefined;
 }
 
 export function ariaLabelledByText(element: Element): string | undefined {

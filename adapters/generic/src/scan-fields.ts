@@ -8,6 +8,7 @@ import {
   labelText,
   legendText,
   precedingText,
+  wrapperLabelText,
 } from './field-text';
 import { isVisible } from './visibility';
 
@@ -54,6 +55,7 @@ export function scanFields(root: ParentNode): FormField[] {
  */
 export function scanControls(root: ParentNode): ScannedField[] {
   const labelsByFor = collectLabelsByFor(root);
+  const checkboxGroupSizes = countCheckboxesByName(root);
   const ids = new Set<string>();
   // Radio groups are keyed by form (null = outside any form), then by name.
   const radioGroups = new Map<HTMLFormElement | null, Map<string, ScannedField>>();
@@ -92,7 +94,8 @@ export function scanControls(root: ParentNode): ScannedField[] {
     }
 
     const htmlId = control.id || undefined;
-    const label = labelText(control, labelsByFor) ?? ariaLabelledByText(control);
+    const label =
+      labelText(control, labelsByFor) ?? ariaLabelledByText(control) ?? wrapperLabelText(control);
     const ariaLabel = attributeText(control, 'aria-label');
     const nearbyText =
       legendText(control) ?? (label || ariaLabel ? undefined : precedingText(control));
@@ -117,6 +120,9 @@ export function scanControls(root: ParentNode): ScannedField[] {
       }));
     } else if (type === 'radio') {
       field.options = [radioOption(control, labelsByFor)];
+    } else if (type === 'checkbox' && name) {
+      const groupSize = checkboxGroupSizes.get(control.form)?.get(name) ?? 1;
+      if (groupSize > 1) field.groupSize = groupSize;
     }
     scanned.push({ field, controls: [control] });
   });
@@ -137,9 +143,28 @@ function createField(
     disabled: isDisabled(control),
     signals,
   };
+  if (isReadOnly(control)) field.readOnly = true;
   const form = formContext(control);
   if (form) field.form = form;
   return field;
+}
+
+function isReadOnly(control: FormControl): boolean {
+  const readOnly = 'readOnly' in control && control.readOnly;
+  return readOnly || control.getAttribute('aria-readonly') === 'true';
+}
+
+/** Checkboxes per form (null = outside any form) and name; more than one is a group. */
+function countCheckboxesByName(root: ParentNode): Map<HTMLFormElement | null, Map<string, number>> {
+  const counts = new Map<HTMLFormElement | null, Map<string, number>>();
+  root.querySelectorAll<HTMLInputElement>('input[type="checkbox"][name]').forEach((checkbox) => {
+    const name = attributeText(checkbox, 'name');
+    if (!name) return;
+    const inForm = counts.get(checkbox.form) ?? new Map<string, number>();
+    inForm.set(name, (inForm.get(name) ?? 0) + 1);
+    counts.set(checkbox.form, inForm);
+  });
+  return counts;
 }
 
 function isRequired(control: FormControl): boolean {

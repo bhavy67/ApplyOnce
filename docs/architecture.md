@@ -116,6 +116,12 @@ apps/chrome-extension/src/profile-page   React UI; talks only to ProfileReposito
   and requires the same profile field with status _mapped_ or _review_, checks the field
   type can hold it, and looks up the value. Anything else becomes a result (failed,
   unsupported, skipped) and is never sent to the page.
+- **Build handshake.** `src/build-info.ts` exposes a build id injected by
+  `vite.config.ts` (`__APPLYONCE_BUILD_ID__`) into the popup and service worker, which are
+  built together. Analyze starts with `GetRuntimeInfo` (extension pages only; returns only
+  the build id). A different id, or `unknown-message` from an older worker, yields the
+  `extension-updated` failure ("Reload the extension"); no receiver yields
+  `worker-unavailable`. Nothing is scanned or injected in either case.
 - **Payload validation.** Every payload is structurally validated in `parseMessage`
   (`messaging/validate.ts`); malformed payloads are rejected.
 - **Injection.** Only on user action, only into the active tab's top frame, only for
@@ -146,6 +152,15 @@ level (no `<form>` required). Each supported control becomes a `FormField` (core
 Radios with the same name in the same form become one field. Workday and Greenhouse
 adapters still only detect their URLs; the content script reports the detected platform
 but always scans and fills with the generic adapter for now.
+
+Phase 6 additions: a **wrapper label** rule (the only `for`-less `<label>` in the smallest
+wrapper, at most three levels up, that contains only this field), `aria-hidden` text
+excluded from labels, `readOnly` (`readonly` or `aria-readonly`), and `groupSize` for
+checkboxes sharing a name in a form (a multi-option group, never filled). The mapper marks
+read-only fields and checkbox-group options `unsupported`. Questions are normalized with
+`normalizeQuestion` (required/optional markers removed); saved-mapping lookups also try the
+key a field had before that change (`mappingKeyCandidates`), so earlier Teach Once
+mappings keep working. `contenteditable` is deliberately not scanned.
 
 `scanControls` returns the same fields with their current elements. Filling
 (`fill-fields.ts`) re-scans, finds each field by id, and requires its type and name/id (or

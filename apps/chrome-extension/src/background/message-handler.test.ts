@@ -694,3 +694,21 @@ describe('Phase 5 fields through the service worker', () => {
     for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe('GetRuntimeInfo', () => {
+  it('returns only the build id, to extension pages', async () => {
+    const { handle } = await setup(sampleProfile);
+    expect(await handle({ type: MessageType.GetRuntimeInfo }, EXTENSION_PAGE)).toEqual({
+      ok: true,
+      data: { buildId: 'development' },
+    });
+  });
+
+  it('is refused for content scripts', async () => {
+    const { handle } = await setup(sampleProfile);
+    expect(await handle({ type: MessageType.GetRuntimeInfo }, WEB_PAGE)).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+  });
+});

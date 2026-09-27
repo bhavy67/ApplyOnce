@@ -9,7 +9,7 @@ import {
   type UnsupportedReason,
 } from '@applyonce/core';
 import { createFieldSignature } from './field-signature';
-import { createMappingKey } from './mapping-key';
+import { mappingKeyCandidates } from './mapping-key';
 import type { FieldMatcher } from './matcher';
 
 /** Saved mappings by key. */
@@ -29,8 +29,9 @@ const TAUGHT_CONFIDENCE: ConfidenceResult = {
  * 2. The deterministic matcher: high confidence → mapped; lower → review.
  * 3. Otherwise → unknown (never filled).
  *
- * A match the field cannot currently be filled with (hidden, disabled, or the wrong kind
- * of field) is reported as unsupported, whatever its source.
+ * A match the field cannot currently be filled with (hidden, disabled, read-only, a
+ * multi-option checkbox group, or the wrong kind of field) is reported as unsupported,
+ * whatever its source.
  */
 export function mapFields(
   fields: readonly FormField[],
@@ -45,10 +46,12 @@ function mapField(
   matcher: FieldMatcher,
   savedMappings: SavedMappingLookup,
 ): FieldMapping {
-  const mappingKey = createMappingKey(field);
+  const [mappingKey, ...legacyKeys] = mappingKeyCandidates(field);
   const base = { fieldId: field.id, ...(mappingKey ? { mappingKey } : {}) };
 
-  const saved = mappingKey ? savedMappings.get(mappingKey) : undefined;
+  const saved = [mappingKey, ...legacyKeys]
+    .map((key) => (key ? savedMappings.get(key) : undefined))
+    .find((mapping) => mapping !== undefined);
   if (saved && isUsableSavedMapping(saved, field)) {
     return withStatus(
       {
@@ -109,7 +112,9 @@ function findUnsupportedReason(
   profileField: ProfileFieldKey,
 ): UnsupportedReason | undefined {
   if (!PROFILE_FIELDS[profileField].fieldTypes.includes(field.type)) return 'incompatible-type';
+  if (field.type === 'checkbox' && (field.groupSize ?? 1) > 1) return 'checkbox-group';
   if (!field.visible) return 'hidden';
   if (field.disabled) return 'disabled';
+  if (field.readOnly) return 'readonly';
   return undefined;
 }

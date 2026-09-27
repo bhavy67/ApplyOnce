@@ -47,6 +47,8 @@ export const MessageType = {
   ListMappings: 'applyonce/list-mappings',
   DeleteMapping: 'applyonce/delete-mapping',
   ClearMappings: 'applyonce/clear-mappings',
+  /** Which build the service worker runs, to detect a stale worker. Extension pages only. */
+  GetRuntimeInfo: 'applyonce/get-runtime-info',
 } as const;
 
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
@@ -89,6 +91,7 @@ export interface PayloadByType {
   [MessageType.ListMappings]: undefined;
   [MessageType.DeleteMapping]: { key: string };
   [MessageType.ClearMappings]: undefined;
+  [MessageType.GetRuntimeInfo]: undefined;
 }
 
 /** Response payload for each message type. */
@@ -105,6 +108,7 @@ export interface ResponseDataByType {
   [MessageType.ListMappings]: { mappings: SavedMapping[] };
   [MessageType.DeleteMapping]: { deleted: boolean };
   [MessageType.ClearMappings]: { cleared: true };
+  [MessageType.GetRuntimeInfo]: { buildId: string };
 }
 
 export type Message<T extends MessageType = MessageType> = T extends MessageType

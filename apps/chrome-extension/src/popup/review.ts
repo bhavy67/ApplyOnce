@@ -6,6 +6,7 @@ import {
   type FillResult,
   type FillStatus,
   type ProfileFieldKey,
+  type UnsupportedReason,
 } from '@applyonce/core';
 import type { ReviewedMapping } from '../messaging/protocol';
 
@@ -22,6 +23,14 @@ export const FILL_STATUS_LABELS: Readonly<Record<FillStatus, string>> = {
   failed: 'Failed',
   'not-found': 'Not found',
   unsupported: 'Not supported',
+};
+
+const UNSUPPORTED_NOTES: Readonly<Record<UnsupportedReason, string>> = {
+  'incompatible-type': 'This field cannot hold that value.',
+  hidden: 'Hidden field. Will not be filled.',
+  disabled: 'Disabled field. Will not be filled.',
+  readonly: 'Read-only field. Will not be filled.',
+  'checkbox-group': 'One option of a multi-choice group. Will not be filled.',
 };
 
 const FILLABLE_STATUSES: ReadonlySet<string> = new Set(['mapped', 'review', 'taught']);
@@ -78,11 +87,7 @@ export function mappingNote(mapping: ReviewedMapping, selected: boolean): string
     case 'unknown':
       return 'No safe match. Will not be filled.';
     case 'unsupported':
-      return mapping.unsupportedReason === 'hidden'
-        ? 'Hidden field. Will not be filled.'
-        : mapping.unsupportedReason === 'disabled'
-          ? 'Disabled field. Will not be filled.'
-          : 'This field cannot hold that value.';
+      return UNSUPPORTED_NOTES[mapping.unsupportedReason ?? 'incompatible-type'];
     default:
       if (!mapping.hasValue) return 'No value in your profile.';
       if (selected) return 'Ready to fill';

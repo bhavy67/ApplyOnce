@@ -4,6 +4,8 @@ import { MessageType, ok, type PageScan, type ReviewedMapping } from '../messagi
 import {
   analyzeActiveTab,
   fieldDisplayName,
+  checkRuntime,
+  FAILURE_MESSAGES,
   fillApprovedFields,
   isAnalyzableUrl,
   summarizeFields,
@@ -21,6 +23,11 @@ function field(overrides: Partial<FormField> & Pick<FormField, 'signals'>): Form
     ...overrides,
   };
 }
+
+/** The build id in tests (no build-time define): see src/build-info.ts. */
+const SAME_BUILD = ok({ buildId: 'development' });
+const isRuntimeInfo = (message: unknown) =>
+  (message as { type?: string }).type === MessageType.GetRuntimeInfo;
 
 describe('isAnalyzableUrl', () => {
   it.each([
@@ -109,8 +116,8 @@ describe('analyzeActiveTab', () => {
         message.type === MessageType.Ping ? ok({ ready: true }) : scanResponse,
       );
     });
-    const runtimeSendMessage = vi.fn<(message: unknown) => Promise<unknown>>(() =>
-      Promise.resolve(workerResponse),
+    const runtimeSendMessage = vi.fn<(message: unknown) => Promise<unknown>>((message) =>
+      Promise.resolve(isRuntimeInfo(message) ? SAME_BUILD : workerResponse),
     );
     vi.stubGlobal('chrome', {
       tabs: { query: vi.fn(() => Promise.resolve(tab.id === undefined ? [] : [tab])), sendMessage },
@@ -134,10 +141,10 @@ describe('analyzeActiveTab', () => {
       scan,
       mappings,
     });
-    expect(runtimeSendMessage).toHaveBeenCalledExactlyOnceWith({
-      type: MessageType.MapFields,
-      payload: { fields: scan.fields },
-    });
+    expect(runtimeSendMessage.mock.calls.map(([message]) => message)).toEqual([
+      { type: MessageType.GetRuntimeInfo },
+      { type: MessageType.MapFields, payload: { fields: scan.fields } },
+    ]);
     expect(executeScript).toHaveBeenCalledExactlyOnceWith({
       target: { tabId: 7 },
       files: ['content.js'],
@@ -201,7 +208,12 @@ describe('analysis mapping and filling', () => {
           ),
       },
       scripting: { executeScript: () => Promise.resolve([]) },
-      runtime: { sendMessage: () => Promise.resolve({ ok: false, error: 'profile-unavailable' }) },
+      runtime: {
+        sendMessage: (message: unknown) =>
+          Promise.resolve(
+            isRuntimeInfo(message) ? SAME_BUILD : { ok: false, error: 'profile-unavailable' },
+          ),
+      },
     });
     expect(await analyzeActiveTab()).toEqual({ ok: false, reason: 'profile-unavailable' });
   });
@@ -256,5 +268,46 @@ describe('teachMapping', () => {
       runtime: { sendMessage: () => Promise.resolve({ ok: false, error: 'invalid-mapping' }) },
     });
     expect(await teachMapping(field({ signals: {} }), 'nope', undefined)).toBeUndefined();
+  });
+});
+
+describe('runtime version handshake', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubWorker(answer: () => Promise<unknown>) {
+    const query = vi.fn(() => Promise.resolve([{ id: 1, url: 'https://example.com' }]));
+    vi.stubGlobal('chrome', { runtime: { sendMessage: answer }, tabs: { query } });
+    return query;
+  }
+
+  it('continues when the service worker runs the same build', async () => {
+    stubWorker(() => Promise.resolve(SAME_BUILD));
+    expect(await checkRuntime()).toBeUndefined();
+  });
+
+  it.each([
+    ['a different build id', () => Promise.resolve(ok({ buildId: '0.6.0+old' }))],
+    [
+      'an older worker that does not know the message',
+      () => Promise.resolve({ ok: false, error: 'unknown-message' }),
+    ],
+  ])(
+    'asks for a reload when the worker reports %s, before touching the page',
+    async (_, answer) => {
+      const query = stubWorker(answer);
+      expect(await analyzeActiveTab()).toEqual({ ok: false, reason: 'extension-updated' });
+      expect(FAILURE_MESSAGES['extension-updated']).toMatch(
+        /ApplyOnce was updated\. Reload the extension/,
+      );
+      expect(query).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reports an unresponsive worker without blaming the profile', async () => {
+    stubWorker(() => Promise.reject(new Error('Could not establish connection')));
+    expect(await analyzeActiveTab()).toEqual({ ok: false, reason: 'worker-unavailable' });
+    expect(FAILURE_MESSAGES['worker-unavailable']).not.toMatch(/profile/i);
   });
 });

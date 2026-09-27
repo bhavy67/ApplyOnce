@@ -11,7 +11,13 @@ import type { ProfileFieldKey } from './profile-field';
  */
 export type MappingStatus = 'mapped' | 'review' | 'taught' | 'unknown' | 'unsupported';
 
-export type UnsupportedReason = 'incompatible-type' | 'hidden' | 'disabled';
+export type UnsupportedReason =
+  | 'incompatible-type'
+  | 'hidden'
+  | 'disabled'
+  | 'readonly'
+  /** A checkbox in a multi-option group (see FormField.groupSize). */
+  | 'checkbox-group';
 
 /** Where a mapping came from: the deterministic matcher, or a mapping the user taught. */
 export type MappingSource = 'automatic' | 'taught';

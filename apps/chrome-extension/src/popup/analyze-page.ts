@@ -7,6 +7,7 @@ import {
   type PageScan,
   type ReviewedMapping,
 } from '../messaging/protocol';
+import { BUILD_ID } from '../build-info';
 import { sendToServiceWorker, sendToTab } from '../messaging/send';
 
 export type AnalysisFailure =
@@ -15,7 +16,10 @@ export type AnalysisFailure =
   | 'injection-failed'
   | 'no-response'
   | 'scan-failed'
-  | 'profile-unavailable';
+  | 'profile-unavailable'
+  /** The service worker runs a different build (e.g. an unpacked extension not reloaded). */
+  | 'extension-updated'
+  | 'worker-unavailable';
 
 export type AnalysisResult =
   | {
@@ -36,6 +40,10 @@ export const FAILURE_MESSAGES: Readonly<Record<AnalysisFailure, string>> = {
   'no-response': 'ApplyOnce could not reach this page. Try reloading it.',
   'scan-failed': 'Something went wrong while analyzing this page.',
   'profile-unavailable': 'Your profile could not be loaded, so fields could not be matched.',
+  'extension-updated':
+    'ApplyOnce was updated. Reload the extension (chrome://extensions → reload) and try again.',
+  'worker-unavailable':
+    "ApplyOnce's background service is not responding. Reload the extension and try again.",
 };
 
 /** Sites where Chrome forbids extension scripts regardless of permissions. */
@@ -60,6 +68,9 @@ export function isAnalyzableUrl(url: string | undefined): boolean {
  * with a ping), so repeated clicks never stack scripts.
  */
 export async function analyzeActiveTab(): Promise<AnalysisResult> {
+  const runtime = await checkRuntime();
+  if (runtime) return failure(runtime);
+
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id === undefined) return failure('no-active-tab');
   if (!isAnalyzableUrl(tab.url)) return failure('unsupported-page');
@@ -119,6 +130,17 @@ export async function teachMapping(
     ...(site ? { site } : {}),
   });
   return response.ok ? response.data.mapping : undefined;
+}
+
+/**
+ * Build handshake with the service worker. A different build id, or a worker that does not
+ * know the message at all (an older build), means the extension must be reloaded; this is
+ * reported as such instead of as a misleading profile error.
+ */
+export async function checkRuntime(): Promise<AnalysisFailure | undefined> {
+  const response = await sendToServiceWorker(MessageType.GetRuntimeInfo);
+  if (response.ok) return response.data.buildId === BUILD_ID ? undefined : 'extension-updated';
+  return response.error === 'no-receiver' ? 'worker-unavailable' : 'extension-updated';
 }
 
 function siteOf(url: string | undefined): string | undefined {

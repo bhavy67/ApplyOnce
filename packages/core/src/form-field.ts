@@ -19,6 +19,14 @@ export interface FormField {
   required: boolean;
   visible: boolean;
   disabled: boolean;
+  /** Set when the control is read-only; such fields are never filled. */
+  readOnly?: boolean;
+  /**
+   * For checkboxes: how many checkboxes share this one's name in the same form, when more
+   * than one. Such a group is a multi-option question, which a scalar profile value cannot
+   * answer, so it is never filled.
+   */
+  groupSize?: number;
   signals: FieldSignals;
   /** The enclosing form, when the field belongs to one. Many pages have none. */
   form?: FormContext;

@@ -30,7 +30,8 @@ export function isBoundedArray(value: unknown): value is unknown[] {
 
 export function isFormField(value: unknown): value is FormField {
   if (!isRecord(value)) return false;
-  const { id, type, htmlType, required, visible, disabled, signals, form, options } = value;
+  const { id, type, htmlType, required, visible, disabled, readOnly, groupSize } = value;
+  const { signals, form, options } = value;
   return (
     typeof id === 'string' &&
     typeof type === 'string' &&
@@ -39,6 +40,8 @@ export function isFormField(value: unknown): value is FormField {
     typeof required === 'boolean' &&
     typeof visible === 'boolean' &&
     typeof disabled === 'boolean' &&
+    (readOnly === undefined || typeof readOnly === 'boolean') &&
+    (groupSize === undefined || (Number.isInteger(groupSize) && (groupSize as number) > 0)) &&
     isRecord(signals) &&
     SIGNAL_KEYS.every((key) => isOptionalString(signals[key])) &&
     (form === undefined ||

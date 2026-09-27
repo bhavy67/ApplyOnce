@@ -182,3 +182,15 @@ describe('teaching', () => {
     expect(teachOptions('text').find((o) => o.key === 'postal_code')?.label).toBe('Postal code');
   });
 });
+
+describe('Phase 6 unsupported notes', () => {
+  it.each([
+    ['readonly', 'Read-only field. Will not be filled.'],
+    ['checkbox-group', 'One option of a multi-choice group. Will not be filled.'],
+  ] as const)('%s', (unsupportedReason, note) => {
+    const m = mapping({ fieldId: 'x', status: 'unsupported', unsupportedReason });
+    expect(mappingNote(m, false)).toBe(note);
+    expect(isSelectable(m)).toBe(false);
+    expect(canTeach(m)).toBe(false);
+  });
+});
