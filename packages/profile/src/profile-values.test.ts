@@ -158,7 +158,7 @@ describe('readProfilePath', () => {
     ['education.institution', undefined],
     ['identity.__proto__', undefined],
     ['identity.firstName.length', undefined],
-    ['schemaVersion', 3],
+    ['schemaVersion', 4],
   ])('%s → %j', (path, expected) => {
     expect(readProfilePath(profile, path)).toBe(expected);
   });
@@ -248,29 +248,38 @@ describe('record values', () => {
       expect(readStoredValue(edited, target)).toBe(value);
       expect(getProfileValue(edited, target)).toBe(value);
     }
-    expect(edited.education[0]).toEqual({});
+    expect(values([edited.education[0] ?? {}])).toEqual([{}]);
   });
 });
+
+/** Record values without the stable id (checked separately). */
+const values = (records: readonly object[]) =>
+  records.map((record) => Object.fromEntries(Object.entries(record).filter(([k]) => k !== 'id')));
+const hasIds = (records: readonly { id?: string }[]) =>
+  records.every((record) => typeof record.id === 'string' && record.id.length > 0);
 
 describe('record editing', () => {
   const empty = createEmptyProfile();
 
   it('adds, edits, and removes records', () => {
     let edited = addRecord(empty, 'education');
-    expect(edited.education).toEqual([{}]);
+    expect(values(edited.education)).toEqual([{}]);
+    expect(hasIds(edited.education)).toBe(true);
     edited = updateRecordValue(edited, 'education', 0, 'institution', 'University of Example');
     edited = addRecord(edited, 'education');
     edited = updateRecordValue(edited, 'education', 1, 'institution', 'Sample College');
     edited = updateRecordValue(edited, 'education', 1, 'graduationYear', 2015);
-    expect(edited.education).toEqual([
+    expect(values(edited.education)).toEqual([
       { institution: 'University of Example' },
       { institution: 'Sample College', graduationYear: 2015 },
     ]);
     edited = updateRecordValue(edited, 'education', 1, 'institution', 'Sample University');
     edited = updateRecordValue(edited, 'education', 1, 'graduationYear', undefined);
-    expect(edited.education[1]).toEqual({ institution: 'Sample University' });
+    expect(values([edited.education[1] ?? {}])).toEqual([{ institution: 'Sample University' }]);
+    const secondId = edited.education[1]?.id;
     edited = removeRecord(edited, 'education', 0);
-    expect(edited.education).toEqual([{ institution: 'Sample University' }]);
+    expect(values(edited.education)).toEqual([{ institution: 'Sample University' }]);
+    expect(edited.education[0]?.id).toBe(secondId);
     expect(getProfileValue(edited, 'institution')).toBe('Sample University');
     expect(empty.education).toEqual([]);
   });
@@ -282,7 +291,8 @@ describe('record editing', () => {
     edited = updateRecordValue(edited, 'workExperience', 1, 'company', 'Old Co');
     edited = addRecord(edited, 'certifications');
     edited = updateRecordValue(edited, 'certifications', 0, 'name', 'Example Certified');
-    expect(edited.workExperience).toEqual([
+    expect(hasIds(edited.workExperience)).toBe(true);
+    expect(values(edited.workExperience)).toEqual([
       { company: 'Example Co', current: true },
       { company: 'Old Co' },
     ]);
@@ -311,7 +321,8 @@ describe('record editing', () => {
 
   it('writing a primary education field creates education[0] when there is none', () => {
     const edited = updateProfileValue(empty, 'institution', 'University of Example');
-    expect(edited.education).toEqual([{ institution: 'University of Example' }]);
+    expect(values(edited.education)).toEqual([{ institution: 'University of Example' }]);
+    expect(hasIds(edited.education)).toBe(true);
     expect(updateProfileValue(empty, 'institution', undefined)).toBe(empty);
   });
 

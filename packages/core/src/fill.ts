@@ -12,10 +12,16 @@ export type FillValue = string | number | boolean;
 export interface FillInstruction {
   fieldId: string;
   value: FillValue;
-  expected: { type: FieldType; record?: FormFieldRecord } & Pick<
-    FieldSignals,
-    'name' | 'htmlId' | 'label'
-  >;
+  expected: {
+    type: FieldType;
+    record?: FormFieldRecord;
+    /**
+     * Set only for a repeated field the user assigned to a profile record: how many times
+     * its question appeared at analysis. The field is filled only if that is unchanged.
+     * (The record itself is never sent to the page.)
+     */
+    repeatedCount?: number;
+  } & Pick<FieldSignals, 'name' | 'htmlId' | 'label'>;
 }
 
 /**

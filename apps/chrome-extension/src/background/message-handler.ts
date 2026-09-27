@@ -1,17 +1,29 @@
 import {
+  PROFILE_RECORD_COLLECTION_DEFINITIONS,
   PROFILE_RECORD_COLLECTIONS,
   resolveProfileTarget,
+  type FieldMapping,
+  type ProfileRecordCollection,
   type FillInstruction,
   type FillResult,
   type FormField,
 } from '@applyonce/core';
 import {
+  applyRecordAssignments,
   createAliasMatcher,
   createMappingKeyParts,
+  isAssignableField,
   mapFields,
   type SavedMappingLookup,
 } from '@applyonce/field-mapper';
-import { countProfileValues, getProfileValue, recordCount, type Profile } from '@applyonce/profile';
+import {
+  countProfileValues,
+  getProfileValue,
+  recordChoices,
+  recordCount,
+  recordIndexById,
+  type Profile,
+} from '@applyonce/profile';
 import { BUILD_ID } from '../build-info';
 import { logFailure } from '../log-failure';
 import {
@@ -22,9 +34,18 @@ import {
   type FieldApproval,
   type MessageResult,
   type ProfileRecordCounts,
+  type RecordChoicesByCollection,
   type ReviewedMapping,
 } from '../messaging/protocol';
-import type { ProfileRepository, SavedMappingRepository } from '../storage';
+import type {
+  ProfileRepository,
+  RecordAssignmentRepository,
+  SavedMappingRepository,
+} from '../storage';
+import {
+  isSameAssignedField,
+  type RecordAssignment,
+} from '../storage/record-assignment-repository';
 
 /** The parts of chrome.runtime.MessageSender the handler relies on. */
 export interface Sender {
@@ -43,6 +64,8 @@ export type FillInTab = (
 export interface ServiceWorkerMessageHandlerOptions {
   repository: ProfileRepository;
   mappings: SavedMappingRepository;
+  /** Explicit record assignments for repeated fields. */
+  assignments: RecordAssignmentRepository;
   /** e.g. "chrome-extension://<id>/", from chrome.runtime.getURL(''). */
   extensionOrigin: string;
   fillInTab: FillInTab;
@@ -56,11 +79,14 @@ const MAPPING_MESSAGES: ReadonlySet<string> = new Set([
   MessageType.ListMappings,
   MessageType.DeleteMapping,
   MessageType.ClearMappings,
+  MessageType.SaveAssignment,
+  MessageType.DeleteAssignment,
 ]);
 
 interface MappingContext {
   profile: Profile;
   lookup: SavedMappingLookup;
+  assignments: readonly RecordAssignment[];
 }
 
 /**
@@ -71,6 +97,7 @@ interface MappingContext {
 export function createServiceWorkerMessageHandler({
   repository,
   mappings: savedMappings,
+  assignments: recordAssignments,
   extensionOrigin,
   fillInTab,
 }: ServiceWorkerMessageHandlerOptions) {
@@ -84,13 +111,19 @@ export function createServiceWorkerMessageHandler({
    */
   async function loadContext(): Promise<MappingContext> {
     const profile = await repository.load();
+    let lookup: SavedMappingLookup = new Map();
     try {
       const saved = await savedMappings.list();
-      return { profile, lookup: new Map(saved.map((mapping) => [mapping.key, mapping])) };
+      lookup = new Map(saved.map((mapping) => [mapping.key, mapping]));
     } catch (error) {
       logFailure('saved mappings load', error);
-      return { profile, lookup: new Map() };
     }
+    // Without assignments, repeated fields simply stay unsupported (never a fallback).
+    const assignments = await recordAssignments.list().catch((error: unknown) => {
+      logFailure('record assignments load', error);
+      return [];
+    });
+    return { profile, lookup, assignments };
   }
 
   return async function handleMessage(
@@ -118,19 +151,49 @@ export function createServiceWorkerMessageHandler({
         }
 
         case MessageType.MapFields: {
+          const { fields, page } = message.payload;
           const context = await loadContext();
           return ok({
-            mappings: reviewMappings(message.payload.fields, context),
+            mappings: reviewMappings(fields, context, page),
             records: recordCounts(context.profile),
           });
         }
 
         case MessageType.FillPage: {
-          const { tabId, approvals } = message.payload;
+          const { tabId, approvals, page } = message.payload;
           return ok({
-            results: await fillApproved(tabId, approvals, await loadContext(), fillInTab),
+            results: await fillApproved(tabId, approvals, await loadContext(), fillInTab, page),
           });
         }
+
+        case MessageType.SaveAssignment: {
+          const { page, field, target } = message.payload;
+          const context = await loadContext();
+          const [mapping] = mapFields([field], matcher, context.lookup).mappings;
+          const definition = resolveProfileTarget(target);
+          const record = definition?.record;
+          const recordExists =
+            record?.recordId !== undefined &&
+            recordIndexById(context.profile, record.collection, record.recordId) >= 0;
+          if (!mapping || !isAssignableField(field, mapping) || !recordExists) {
+            return fail('invalid-mapping');
+          }
+          const saved = await recordAssignments.save({ page, field, target });
+          if (!saved.ok) return fail('invalid-mapping');
+          // Assigning never fills: the updated mapping goes back for review only.
+          const [reviewed] = reviewMappings([field], await loadContext(), page);
+          return reviewed ? ok({ mapping: reviewed }) : fail('internal-error');
+        }
+
+        case MessageType.DeleteAssignment: {
+          const { page, field } = message.payload;
+          await recordAssignments.delete(page, field.id);
+          const [reviewed] = reviewMappings([field], await loadContext(), page);
+          return reviewed ? ok({ mapping: reviewed }) : fail('internal-error');
+        }
+
+        case MessageType.GetRecordChoices:
+          return ok({ records: recordChoicesView(await repository.load()) });
 
         case MessageType.SaveMapping: {
           const { field, profileField, site } = message.payload;
@@ -179,8 +242,61 @@ const MESSAGE_TYPES_FOR_WORKER: ReadonlySet<string> = new Set([
   MessageType.MapFields,
   MessageType.FillPage,
   MessageType.GetRuntimeInfo,
+  MessageType.GetRecordChoices,
   ...MAPPING_MESSAGES,
 ]);
+
+/** Records to choose from when assigning: current position, summary, and id (extension only). */
+function recordChoicesView(profile: Profile): RecordChoicesByCollection {
+  const choices = recordChoices(profile);
+  return Object.fromEntries(
+    PROFILE_RECORD_COLLECTIONS.map((collection) => [
+      collection,
+      choices[collection].map(({ recordId, index, summary }) => ({
+        recordId,
+        label: `${PROFILE_RECORD_COLLECTION_DEFINITIONS[collection].itemLabel} ${index + 1}`,
+        summary,
+      })),
+    ]),
+  ) as unknown as RecordChoicesByCollection;
+}
+
+/**
+ * The deterministic mapping, then the user's record assignments for this page. An
+ * assignment applies only to the same field (id and metadata, including how often its
+ * question repeats) on the same page; if its record was deleted it is "unavailable".
+ */
+function mapWithAssignments(
+  fields: readonly FormField[],
+  { profile, lookup, assignments }: MappingContext,
+  page: string | undefined,
+): FieldMapping[] {
+  const mappings = mapFields(fields, matcher, lookup).mappings;
+  if (!page) return mappings;
+  return applyRecordAssignments(fields, mappings, (field) => {
+    const assignment = assignments.find(
+      (a) => a.page === page && a.fieldId === field.id && isSameAssignedField(a.field, field),
+    );
+    if (!assignment) return undefined;
+    const record = resolveProfileTarget(assignment.target)?.record;
+    if (record?.recordId === undefined) return 'unavailable';
+    return recordIndexById(profile, record.collection, record.recordId) >= 0
+      ? assignment.target
+      : 'unavailable';
+  });
+}
+
+/** "Education 2 → Degree" for a record id target, from the record's current position. */
+function assignedTargetLabel(profile: Profile, mapping: FieldMapping): string | undefined {
+  if (mapping.source !== 'assigned' || !mapping.profileField) return undefined;
+  const definition = resolveProfileTarget(mapping.profileField);
+  const record = definition?.record;
+  if (!definition || record?.recordId === undefined) return undefined;
+  const index = recordIndexById(profile, record.collection, record.recordId);
+  const collection: ProfileRecordCollection = record.collection;
+  const fieldLabel = definition.label.split(' → ').at(-1) ?? '';
+  return `${PROFILE_RECORD_COLLECTION_DEFINITIONS[collection].itemLabel} ${index + 1} → ${fieldLabel}`;
+}
 
 /** Record counts for the Teach Once selector; never record values. */
 function recordCounts(profile: Profile): ProfileRecordCounts {
@@ -192,14 +308,20 @@ function recordCounts(profile: Profile): ProfileRecordCounts {
 /** Mappings for review: saved mappings first, then the matcher; values reduced to hasValue. */
 function reviewMappings(
   fields: readonly FormField[],
-  { profile, lookup }: MappingContext,
+  context: MappingContext,
+  page?: string,
 ): ReviewedMapping[] {
-  return mapFields(fields, matcher, lookup).mappings.map((mapping) => ({
-    ...mapping,
-    hasValue:
-      mapping.profileField !== undefined &&
-      getProfileValue(profile, mapping.profileField) !== undefined,
-  }));
+  const { profile } = context;
+  return mapWithAssignments(fields, context, page).map((mapping) => {
+    const targetLabel = assignedTargetLabel(profile, mapping);
+    return {
+      ...mapping,
+      hasValue:
+        mapping.profileField !== undefined &&
+        getProfileValue(profile, mapping.profileField) !== undefined,
+      ...(targetLabel ? { targetLabel } : {}),
+    };
+  });
 }
 
 /**
@@ -211,13 +333,14 @@ async function fillApproved(
   approvals: readonly FieldApproval[],
   context: MappingContext,
   fillInTab: FillInTab,
+  page?: string,
 ): Promise<FillResult[]> {
   const results: FillResult[] = [];
   const instructions: FillInstruction[] = [];
   const instructionSlots: number[] = [];
 
   approvals.forEach((approval, index) => {
-    const prepared = prepareInstruction(approval, context);
+    const prepared = prepareInstruction(approval, context, page);
     if ('status' in prepared) {
       results[index] = prepared;
     } else {
@@ -250,8 +373,10 @@ async function fillApproved(
  */
 function prepareInstruction(
   { field, profileField }: FieldApproval,
-  { profile, lookup }: MappingContext,
+  context: MappingContext,
+  page: string | undefined,
 ): FillInstruction | FillResult {
+  const { profile } = context;
   const fieldId = field.id;
   const target = resolveProfileTarget(profileField);
   if (!target) {
@@ -260,9 +385,12 @@ function prepareInstruction(
   if (!target.fieldTypes.includes(field.type)) {
     return { fieldId, status: 'unsupported', message: 'This field cannot hold that value.' };
   }
-  const [mapping] = mapFields([field], matcher, lookup).mappings;
+  const [mapping] = mapWithAssignments([field], context, page);
   const approvable =
-    mapping?.status === 'mapped' || mapping?.status === 'review' || mapping?.status === 'taught';
+    mapping?.status === 'mapped' ||
+    mapping?.status === 'review' ||
+    mapping?.status === 'taught' ||
+    mapping?.status === 'assigned';
   if (!approvable || mapping.profileField !== target.target) {
     return { fieldId, status: 'failed', message: 'This field does not match that profile field.' };
   }
@@ -272,9 +400,18 @@ function prepareInstruction(
   }
   const { name, htmlId, label } = field.signals;
   const record = field.record && { collection: field.record.collection, index: field.record.index };
+  // An assigned repeated field carries only its repeat count to the page (never the record).
+  const repeatedCount = mapping.status === 'assigned' ? field.repeatedCount : undefined;
   return {
     fieldId,
     value,
-    expected: { type: field.type, name, htmlId, label, ...(record ? { record } : {}) },
+    expected: {
+      type: field.type,
+      name,
+      htmlId,
+      label,
+      ...(record ? { record } : {}),
+      ...(repeatedCount ? { repeatedCount } : {}),
+    },
   };
 }

@@ -8,6 +8,8 @@ import type {
 } from '../messaging/protocol';
 import {
   analyzeActiveTab,
+  assignRecord,
+  removeRecordAssignment,
   FAILURE_MESSAGES,
   fillApprovedFields,
   summarizeFields,
@@ -19,6 +21,7 @@ import { ReviewList } from './ReviewList';
 interface Analysis {
   tabId: number;
   site?: string;
+  page?: string;
   scan: PageScan;
   mappings: ReviewedMapping[];
   records: ProfileRecordCounts;
@@ -110,7 +113,7 @@ export function Popup() {
 }
 
 function AnalysisReview({ analysis }: { analysis: Analysis }) {
-  const { tabId, site, scan, records } = analysis;
+  const { tabId, site, page, scan, records } = analysis;
   const [mappings, setMappings] = useState(analysis.mappings);
   const [selected, setSelected] = useState(() => initialSelection(analysis.mappings));
   const [filling, setFilling] = useState(false);
@@ -132,14 +135,35 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
     });
   }
 
+  /** Replaces one field's mapping; a changed mapping must be approved again before filling. */
+  function replaceMapping(field: FormField, updated: ReviewedMapping) {
+    setMappings((current) => current.map((m) => (m.fieldId === field.id ? updated : m)));
+    toggle(field.id, false);
+    setResults((current) => current?.filter((r) => r.fieldId !== field.id));
+  }
+
   /** Saves the taught mapping and updates this field's review. Never fills. */
   async function teach(field: FormField, profileField: string): Promise<string | undefined> {
     const updated = await teachMapping(field, profileField, site).catch(() => undefined);
     if (!updated) return 'Could not save this mapping.';
-    setMappings((current) => current.map((m) => (m.fieldId === field.id ? updated : m)));
-    // A changed mapping must be approved again before it can be filled.
-    toggle(field.id, false);
-    setResults((current) => current?.filter((r) => r.fieldId !== field.id));
+    replaceMapping(field, updated);
+    return undefined;
+  }
+
+  /** Saves an explicit record assignment for a repeated field. Never fills. */
+  async function assign(field: FormField, target: string): Promise<string | undefined> {
+    if (!page) return 'Record assignment is not available on this page.';
+    const updated = await assignRecord(page, field, target).catch(() => undefined);
+    if (!updated) return 'Could not save this assignment.';
+    replaceMapping(field, updated);
+    return undefined;
+  }
+
+  async function unassign(field: FormField): Promise<string | undefined> {
+    if (!page) return undefined;
+    const updated = await removeRecordAssignment(page, field).catch(() => undefined);
+    if (!updated) return 'Could not remove this assignment.';
+    replaceMapping(field, updated);
     return undefined;
   }
 
@@ -151,7 +175,7 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
     setFilling(true);
     setFillError(undefined);
     try {
-      const filled = await fillApprovedFields(tabId, approvals);
+      const filled = await fillApprovedFields(tabId, approvals, page);
       if (filled) setResults(filled);
       else setFillError('Filling failed. Analyze the page again and retry.');
     } catch {
@@ -215,6 +239,8 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
           disabled={filling}
           onToggle={toggle}
           onTeach={teach}
+          onAssign={page ? assign : undefined}
+          onUnassign={unassign}
         />
       )}
     </section>

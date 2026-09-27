@@ -154,3 +154,52 @@ describe('filling and repeated questions', () => {
     expect([value('a'), value('b')]).toEqual(['', '']);
   });
 });
+
+describe('filling an assigned repeated field', () => {
+  const assigned = (fieldId: string, value: string): FillInstruction => {
+    const found = scanFields(document).find((f) => f.id === fieldId);
+    if (!found) throw new Error('no field');
+    const { name, htmlId, label } = found.signals;
+    return {
+      fieldId,
+      value,
+      expected: {
+        type: found.type,
+        name,
+        htmlId,
+        label,
+        ...(found.repeatedCount ? { repeatedCount: found.repeatedCount } : {}),
+      },
+    };
+  };
+  const value = (id: string) => (document.getElementById(id) as HTMLInputElement).value;
+
+  it('fills each assigned copy when the repetition is unchanged', async () => {
+    document.body.innerHTML = `<form>${input('a', 'Degree')}${input('b', 'Degree')}${input('c', 'Degree')}</form>`;
+    const results = await fillFields(document, [
+      assigned('id:a', 'Degree A'),
+      assigned('id:c', 'Degree C'),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['filled', 'filled']);
+    expect([value('a'), value('b'), value('c')]).toEqual(['Degree A', '', 'Degree C']);
+  });
+
+  it('refuses when the number of copies changed since Analyze', async () => {
+    document.body.innerHTML = `<form id="f">${input('a', 'Degree')}${input('b', 'Degree')}</form>`;
+    const approved = [assigned('id:a', 'Degree A')];
+    document.getElementById('f')?.insertAdjacentHTML('beforeend', input('c', 'Degree'));
+    const [result] = await fillFields(document, approved);
+    expect(result).toMatchObject({
+      status: 'skipped',
+      message: 'The repeated questions on the page changed. Analyze again.',
+    });
+    expect(value('a')).toBe('');
+  });
+
+  it('refuses when the field is no longer repeated', async () => {
+    document.body.innerHTML = `<form>${input('a', 'Degree')}<div id="x">${input('b', 'Degree')}</div></form>`;
+    const approved = [assigned('id:a', 'Degree A')];
+    document.getElementById('x')?.remove();
+    expect((await fillFields(document, approved))[0]).toMatchObject({ status: 'skipped' });
+  });
+});

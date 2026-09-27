@@ -12,14 +12,31 @@ const sampleProfile: Profile = {
   ...createEmptyProfile(),
   identity: { firstName: 'Jane', lastName: 'Doe' },
   contact: { email: 'jane@example.com' },
+  // Stored profiles carry stable record ids (schema 4).
   education: [
-    { institution: 'Example University', graduationYear: 2019 },
-    { institution: 'Sample College' },
+    {
+      id: '11111111-1111-4111-8111-111111111111',
+      institution: 'Example University',
+      graduationYear: 2019,
+    },
+    { id: '22222222-2222-4222-8222-222222222222', institution: 'Sample College' },
   ],
   workExperience: [
-    { company: 'Example Co', title: 'Engineer', startDate: '2021-06', current: true },
+    {
+      id: '33333333-3333-4333-8333-333333333333',
+      company: 'Example Co',
+      title: 'Engineer',
+      startDate: '2021-06',
+      current: true,
+    },
   ],
-  certifications: [{ name: 'Example Certified', credentialUrl: 'https://cert.example.com/1' }],
+  certifications: [
+    {
+      id: '44444444-4444-4444-8444-444444444444',
+      name: 'Example Certified',
+      credentialUrl: 'https://cert.example.com/1',
+    },
+  ],
 };
 
 describe('profile repository', () => {
@@ -95,7 +112,7 @@ describe('profile repository: upgrading a version 1 (Phase 1–4) profile', () =
     customAnswers: [],
   };
 
-  it('loads, migrates, saves as version 3, and loads again with every value kept', async () => {
+  it('loads, migrates, saves as the current version, and loads again with every value kept', async () => {
     const store = createIndexedDbStore<ExtensionStorageSchema>({
       databaseName: 'upgrade-test',
       factory: new IDBFactory(),
@@ -117,7 +134,7 @@ describe('profile repository: upgrading a version 1 (Phase 1–4) profile', () =
 
     const loaded = await repository.load();
     expect(loaded).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       identity: { firstName: 'Jane', lastName: 'Doe' },
       education: [
         { institution: 'Example University', degree: 'MSc' },
@@ -132,7 +149,7 @@ describe('profile repository: upgrading a version 1 (Phase 1–4) profile', () =
     expect(await store.get('profile')).toEqual(phase4Profile);
 
     await repository.save(loaded);
-    expect((await store.get('profile'))?.schemaVersion).toBe(3);
+    expect((await store.get('profile'))?.schemaVersion).toBe(4);
     expect(await repository.load()).toEqual(loaded);
     // Saved mappings are a separate record and are untouched by the upgrade.
     expect((await store.get('savedMappings'))?.mappings).toHaveLength(1);
@@ -154,7 +171,7 @@ describe('profile repository: upgrading a version 2 (Phase 5–9) profile', () =
     customAnswers: [],
   };
 
-  it('loads as version 3 with the primary education record first; saving persists it', async () => {
+  it('loads as the current version with the primary education record first; saving persists it', async () => {
     const store = createIndexedDbStore<ExtensionStorageSchema>({
       databaseName: 'upgrade-v2-test',
       factory: new IDBFactory(),
@@ -163,7 +180,7 @@ describe('profile repository: upgrading a version 2 (Phase 5–9) profile', () =
     const repository = createProfileRepository(store);
     const loaded = await repository.load();
     expect(loaded).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       education: [{ institution: 'University of Example', fieldOfStudy: 'Physics' }],
       experience: { currentCompany: 'Example Co', currentTitle: 'Staff Engineer' },
       workExperience: [],

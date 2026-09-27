@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 12 — Generic repeated-field safety: complete.**
+**Phase 13 — Explicit record assignment + stable record identity: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -43,6 +43,9 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 12: a question asked more than once without record context (e.g. two "Degree"
   fields under one "Education" heading) is never filled, on generic pages as on Workday. See
   [Repeated questions](#repeated-questions-without-record-context).
+- Phase 13: every profile record has a stable id, and you can explicitly **assign** a
+  repeated field to one specific record ("this Degree is Education 1's"). See
+  [Record assignment](#explicit-record-assignment).
 
 Nothing is ever submitted. Greenhouse gets dedicated support in a later phase; until then
 it is handled by the generic adapter.
@@ -288,11 +291,55 @@ guessing would put one record's value (usually the primary one) into several fie
   is skipped ("This question now appears more than once on the page. Analyze again."); one
   that stopped being repeated is filled only after a new Analyze and approval.
 - **Generic pages and Workday** use the same rule (in the generic scanner).
+- **Assign record** is the only way to make such a field fillable (see below).
+
+### Explicit record assignment
+
+**ApplyOnce never automatically assigns an ambiguous repeated field to a profile record.
+Record assignment is explicit user action.**
+
+- **Where.** Only fields shown as "Repeated question · no record context" offer **Assign
+  record** (single fields keep automatic mapping and Teach Once; fields in recognized record
+  sections keep their positional mapping).
+- **How.** The picker lists your records in their current order, e.g. "Education 1 —
+  University A · Master's", with the fields this control can hold ("Education 1 → Degree").
+  Labels use only a record's summary fields (institution and degree, company and title,
+  certification name and issuer), never contact details. Record ids are never shown.
+- **After assigning** the field reads "Education 1 → Degree · Assigned by you" and stays
+  unticked: assigning never fills. Tick it and **Fill** to send that record's value. **Change
+  record** replaces the assignment (the field is unticked again); **Remove assignment** makes
+  it a repeated question again.
+- **Stable identity.** An assignment points to the record's id, not its position: reorder
+  your records and it still fills from the same record (now shown as, say, "Education 2 →
+  Degree"); edit the record and its new value is used.
+- **Deleted records.** If the assigned record is deleted, the field shows "Assigned record no
+  longer exists", cannot be selected, and is never filled from another record. A new record
+  gets a new id and never inherits an old assignment.
+- **Scope (page-scoped, not question-level).** An assignment is stored locally for this page
+  (origin + path) and this field: its field id and metadata, including how many times its
+  question appears. If the page structure changes (for example another copy of the question
+  appears), the assignment no longer applies and the field must be assigned again. It never
+  applies to other pages or to other fields asking the same question, and saved Teach Once
+  mappings still never apply to repeated fields.
+- **Teach Once vs. Assign record.** Teach Once maps a question to a profile field wherever
+  it appears once. Assign record maps one repeated field instance on one page to one specific
+  record. They are stored separately.
+- **At fill time** the service worker re-checks the assignment (same field, record still
+  there, compatible type, value present) and the page re-checks that the field and its
+  repetition are unchanged. Anything that fails is skipped; other fields still fill.
+- **Privacy.** Record ids, record lists, and assignments stay inside the extension; the page
+  receives only the approved value for each approved field.
 
 ### Migration
 
 Profiles are migrated when loaded (`migrateProfile`, pure, deterministic, idempotent, and
 non-destructive; the stored data is never modified in place).
+
+Version 3 (Phases 10–12) → 4: every record gets a stable `id`. New records get a random
+UUID. Records stored before version 4 get an id derived once from their stored content and
+position, so every load (profile page, service worker) agrees on it until the profile is saved
+with it; after that it is read from storage and never recomputed. Values are unchanged, and
+loading still never writes.
 
 Version 2 (Phases 5–9) → 3:
 
@@ -329,7 +376,7 @@ extension is uninstalled. Nothing is sent anywhere; there is no backend.
 Storage code lives only in the extension (`apps/chrome-extension/src/storage`), behind the
 `LocalStore` interface from `packages/core`. Two version numbers exist:
 
-- `Profile.schemaVersion` (currently 3): the shape of the profile. Loading a profile with an
+- `Profile.schemaVersion` (currently 4): the shape of the profile. Loading a profile with an
   unknown or newer version fails loudly instead of discarding it; migrations live in
   `packages/profile/src/migrate-profile.ts`. **Clear profile** deletes the whole profile,
   records included; saved field mappings are kept.

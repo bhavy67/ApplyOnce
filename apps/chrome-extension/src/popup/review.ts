@@ -41,9 +41,11 @@ const UNSUPPORTED_NOTES: Readonly<Record<UnsupportedReason, string>> = {
   'unsupported-control': 'Custom dropdown ApplyOnce cannot operate safely. Will not be filled.',
   'repeated-question':
     "Asked more than once, and ApplyOnce can't tell which profile record each one is for. Will not be filled.",
+  'assignment-unavailable':
+    'The profile record this field was assigned to no longer exists. Assign a record again. Will not be filled.',
 };
 
-const FILLABLE_STATUSES: ReadonlySet<string> = new Set(['mapped', 'review', 'taught']);
+const FILLABLE_STATUSES: ReadonlySet<string> = new Set(['mapped', 'review', 'taught', 'assigned']);
 
 /** Only matched or taught fields with a profile value can be selected; unknown fields never. */
 export function isSelectable(mapping: ReviewedMapping): boolean {
@@ -63,6 +65,8 @@ export function initialSelection(mappings: readonly ReviewedMapping[]): Set<stri
 }
 
 export function profileFieldDescription(mapping: ReviewedMapping): string | undefined {
+  // Record assignments are shown by the record's current position; their id is never shown.
+  if (mapping.source === 'assigned') return mapping.targetLabel;
   const target = resolveProfileTarget(mapping.profileField);
   return target && `${target.label} (${target.path})`;
 }
@@ -72,8 +76,14 @@ export function profileFieldDescription(mapping: ReviewedMapping): string | unde
  * than once without record context says so instead of "No match": it was recognized, but no
  * profile record can be chosen for each copy.
  */
-export function mappingLine(mapping: ReviewedMapping, field: Pick<FormField, 'record'>): string {
+export function mappingLine(
+  mapping: ReviewedMapping,
+  field: Pick<FormField, 'record' | 'repeatedCount'>,
+): string {
   const target = profileFieldDescription(mapping);
+  if (mapping.unsupportedReason === 'assignment-unavailable') {
+    return 'Assigned record no longer exists · Assigned by you';
+  }
   if (!target && mapping.unsupportedReason === 'repeated-question' && !field.record) {
     return 'Repeated question · no record context';
   }
@@ -84,6 +94,7 @@ export function mappingLine(mapping: ReviewedMapping, field: Pick<FormField, 're
 /** Distinguishes what the user taught from what was inferred automatically. */
 export function mappingSourceLabel(mapping: ReviewedMapping): string | undefined {
   if (mapping.source === 'taught') return 'Taught by you';
+  if (mapping.source === 'assigned') return 'Assigned by you';
   if (mapping.status === 'unknown') return undefined;
   return `Automatic · ${CONFIDENCE_LABELS[mapping.confidence.level]}`;
 }
@@ -92,6 +103,25 @@ export function mappingSourceLabel(mapping: ReviewedMapping): string | undefined
 export function canTeach(mapping: ReviewedMapping): boolean {
   if (!mapping.mappingKey) return false;
   return !(mapping.status === 'unsupported' && mapping.unsupportedReason !== 'incompatible-type');
+}
+
+/**
+ * "Assign record" is offered only for a question asked more than once without record
+ * context (and to change or redo an assignment). Single fields never need it.
+ */
+export function canAssign(
+  mapping: ReviewedMapping,
+  field: Pick<FormField, 'record' | 'repeatedCount'>,
+): boolean {
+  if (field.record || (field.repeatedCount ?? 1) < 2) return false;
+  return (
+    mapping.source === 'assigned' ||
+    (mapping.status === 'unsupported' && mapping.unsupportedReason === 'repeated-question')
+  );
+}
+
+export function assignActionLabel(mapping: ReviewedMapping): 'Assign record' | 'Change record' {
+  return mapping.source === 'assigned' ? 'Change record' : 'Assign record';
 }
 
 export function teachActionLabel(mapping: ReviewedMapping): 'Teach' | 'Change' {
@@ -159,6 +189,7 @@ export function mappingNote(mapping: ReviewedMapping, selected: boolean): string
       if (!mapping.hasValue) return 'No value in your profile.';
       if (selected) return 'Ready to fill';
       if (mapping.status === 'taught') return 'Taught by you. Select to fill.';
+      if (mapping.status === 'assigned') return 'Assigned by you. Select to fill.';
       return mapping.status === 'review' ? 'Needs review. Select to fill.' : 'Not selected';
   }
 }

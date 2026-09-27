@@ -5,12 +5,17 @@
  */
 import { isFillResultList, MessageType } from '../messaging/protocol';
 import { sendToTab } from '../messaging/send';
-import { createBrowserProfileRepository, createBrowserSavedMappingRepository } from '../storage';
+import {
+  createBrowserProfileRepository,
+  createBrowserRecordAssignmentRepository,
+  createBrowserSavedMappingRepository,
+} from '../storage';
 import { createServiceWorkerMessageHandler } from './message-handler';
 
 const handleMessage = createServiceWorkerMessageHandler({
   repository: createBrowserProfileRepository(),
   mappings: createBrowserSavedMappingRepository(),
+  assignments: createBrowserRecordAssignmentRepository(),
   extensionOrigin: chrome.runtime.getURL(''),
   fillInTab: async (tabId, instructions) => {
     const response = await sendToTab(tabId, MessageType.FillFields, { instructions });

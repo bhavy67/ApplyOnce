@@ -137,13 +137,18 @@ describe('analyzeActiveTab', () => {
     expect(await analyzeActiveTab()).toEqual({
       ok: true,
       tabId: 7,
+      page: 'https://jobs.example.com/apply',
       site: 'jobs.example.com',
       scan,
       mappings,
     });
     expect(runtimeSendMessage.mock.calls.map(([message]) => message)).toEqual([
       { type: MessageType.GetRuntimeInfo },
-      { type: MessageType.MapFields, payload: { fields: scan.fields } },
+      // Phase 13: the page (origin + path) scopes record assignments.
+      {
+        type: MessageType.MapFields,
+        payload: { fields: scan.fields, page: 'https://jobs.example.com/apply' },
+      },
     ]);
     expect(executeScript).toHaveBeenCalledExactlyOnceWith({
       target: { tabId: 7 },

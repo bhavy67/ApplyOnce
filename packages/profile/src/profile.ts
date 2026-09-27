@@ -15,8 +15,9 @@ import type { EMPLOYMENT_TYPE_CHOICES, WORK_MODE_CHOICES } from '@applyonce/core
  * - 2: single primary education record, single work mode and employment type, website.
  * - 3: repeatable records: education list (the first entry is the primary record), work
  *   experience list (moved from `experience.workHistory`), certifications list.
+ * - 4: every record has a stable `id` (see RecordIdentity).
  */
-export const PROFILE_SCHEMA_VERSION = 3;
+export const PROFILE_SCHEMA_VERSION = 4;
 
 export interface Profile {
   schemaVersion: typeof PROFILE_SCHEMA_VERSION;
@@ -68,7 +69,17 @@ export interface Location {
   postalCode?: string;
 }
 
-export interface EducationEntry {
+/**
+ * A record's stable identity: set when the record is created, kept through edits and
+ * reordering, gone when the record is deleted. Never derived from its position after
+ * creation. Loaded profiles always have it; it is optional in the type only so values can
+ * be written before a record is stored.
+ */
+export interface RecordIdentity {
+  id?: string;
+}
+
+export interface EducationEntry extends RecordIdentity {
   institution?: string;
   degree?: string;
   fieldOfStudy?: string;
@@ -87,7 +98,7 @@ export interface Experience {
   noticePeriod?: string;
 }
 
-export interface WorkExperienceEntry {
+export interface WorkExperienceEntry extends RecordIdentity {
   company?: string;
   title?: string;
   location?: string;
@@ -99,7 +110,7 @@ export interface WorkExperienceEntry {
   description?: string;
 }
 
-export interface CertificationEntry {
+export interface CertificationEntry extends RecordIdentity {
   name?: string;
   issuer?: string;
   issueYear?: number;

@@ -1,5 +1,6 @@
 import {
   isProfileFieldKey,
+  isRecordIdTarget,
   MAX_PROFILE_RECORDS,
   recordTarget,
   resolveProfileTarget,
@@ -98,6 +99,8 @@ function mapField(
  * field), the same field type, and a type that can hold it. Returns the canonical target.
  */
 function usableSavedTarget(saved: SavedMapping, field: FormField): ProfileTarget | undefined {
+  // Record id targets belong to explicit record assignments only, never to Teach Once.
+  if (isRecordIdTarget(saved.profileField)) return undefined;
   const definition = resolveProfileTarget(saved.profileField);
   const usable =
     saved.parts.fieldType === field.type && definition?.fieldTypes.includes(field.type) === true;
@@ -184,12 +187,23 @@ function findUnsupportedReason(
   field: FormField,
   profileField: ProfileTarget,
 ): UnsupportedReason | undefined {
+  if ((field.repeatedCount ?? 1) > 1) return 'repeated-question';
+  return fieldStateReason(field, profileField);
+}
+
+/**
+ * Why this field cannot hold or receive a value for this target, apart from repetition:
+ * type compatibility and the field's own state. Shared with record assignments.
+ */
+export function fieldStateReason(
+  field: FormField,
+  profileField: ProfileTarget,
+): UnsupportedReason | undefined {
   if (!resolveProfileTarget(profileField)?.fieldTypes.includes(field.type)) {
     return 'incompatible-type';
   }
   if (field.type === 'checkbox' && (field.groupSize ?? 1) > 1) return 'checkbox-group';
   if (field.custom && !field.custom.supported) return 'unsupported-control';
-  if ((field.repeatedCount ?? 1) > 1) return 'repeated-question';
   if (!field.visible) return 'hidden';
   if (field.disabled) return 'disabled';
   if (field.readOnly) return 'readonly';

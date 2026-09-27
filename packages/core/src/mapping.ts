@@ -7,9 +7,11 @@ import type { ProfileTarget } from './profile-field';
  * - review: a plausible automatic match that the user must explicitly approve.
  * - taught: the user taught this mapping (a saved mapping). Still needs explicit approval.
  * - unknown: no safe match. Never filled.
+ * - assigned: a repeated field the user assigned to one specific profile record. Still needs
+ *   explicit approval.
  * - unsupported: recognised, but this field cannot be filled (see `unsupportedReason`).
  */
-export type MappingStatus = 'mapped' | 'review' | 'taught' | 'unknown' | 'unsupported';
+export type MappingStatus = 'mapped' | 'review' | 'taught' | 'assigned' | 'unknown' | 'unsupported';
 
 export type UnsupportedReason =
   | 'incompatible-type'
@@ -21,10 +23,15 @@ export type UnsupportedReason =
   /** A custom dropdown without the ARIA relationships needed to operate it safely. */
   | 'unsupported-control'
   /** The same question appears several times (repeated record sections). */
-  | 'repeated-question';
+  | 'repeated-question'
+  /** The field was assigned to a profile record that no longer exists. */
+  | 'assignment-unavailable';
 
-/** Where a mapping came from: the deterministic matcher, or a mapping the user taught. */
-export type MappingSource = 'automatic' | 'taught';
+/**
+ * Where a mapping came from: the deterministic matcher, a mapping the user taught, or an
+ * explicit record assignment for a repeated field.
+ */
+export type MappingSource = 'automatic' | 'taught' | 'assigned';
 
 /** The mapping outcome for one form field. */
 export interface FieldMapping {

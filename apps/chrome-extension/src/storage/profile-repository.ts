@@ -1,5 +1,6 @@
 import type { LocalStore } from '@applyonce/core';
 import { createEmptyProfile, migrateProfile, type Profile } from '@applyonce/profile';
+import type { RecordAssignmentsRecord } from './record-assignment-repository';
 import type { SavedMappingsRecord } from './saved-mapping-repository';
 
 /** Everything the extension persists locally, by storage key. */
@@ -7,6 +8,8 @@ export interface ExtensionStorageSchema {
   profile: Profile;
   /** Teach Once mappings. Independent of the profile: clearing one never touches the other. */
   savedMappings: SavedMappingsRecord;
+  /** Explicit record assignments for repeated fields. Separate from both records above. */
+  recordAssignments: RecordAssignmentsRecord;
 }
 
 export interface ProfileRepository {

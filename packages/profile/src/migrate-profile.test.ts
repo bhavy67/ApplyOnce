@@ -1,3 +1,4 @@
+import { isRecordId } from '@applyonce/core';
 import { describe, expect, it } from 'vitest';
 import {
   createEmptyProfile,
@@ -5,8 +6,31 @@ import {
   migrateProfile,
   PROFILE_SCHEMA_VERSION,
   sanitizeProfile,
+  type Profile,
   validateProfile,
 } from './index';
+
+/** Record values without the stable ids (which are checked separately, see expectIds). */
+function stripIds<T>(profile: T): T {
+  const copy = clone(profile) as Record<string, unknown>;
+  for (const key of ['education', 'workExperience', 'certifications']) {
+    if (Array.isArray(copy[key])) {
+      copy[key] = (copy[key] as Record<string, unknown>[]).map((record) =>
+        Object.fromEntries(Object.entries(record).filter(([name]) => name !== 'id')),
+      );
+    }
+  }
+  return copy as T;
+}
+
+/** Every record has a valid id, unique within its collection. */
+function expectIds(profile: Profile | undefined) {
+  for (const key of ['education', 'workExperience', 'certifications'] as const) {
+    const ids = (profile?.[key] ?? []).map((record) => record.id);
+    expect(ids.every(isRecordId)).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+  }
+}
 
 /** Stored data is copied, never shared, as with IndexedDB. */
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -37,10 +61,11 @@ const phase4Profile = {
 };
 
 describe('migrateProfile', () => {
-  it('migrates a version 1 profile to version 3 without losing any value', () => {
+  it('migrates a version 1 profile to the current version without losing any value', () => {
     const migrated = migrateProfile(clone(phase4Profile));
 
-    expect(migrated).toEqual({
+    expectIds(migrated);
+    expect(stripIds(migrated)).toEqual({
       ...phase4Profile,
       schemaVersion: PROFILE_SCHEMA_VERSION,
       // The version 1 list order is kept: the first entry is the primary record.
@@ -54,7 +79,7 @@ describe('migrateProfile', () => {
       preferences: { openToRelocation: true, workMode: 'remote', employmentType: 'full-time' },
       legacy: { workModes: ['hybrid'] },
     });
-    expect(PROFILE_SCHEMA_VERSION).toBe(3);
+    expect(PROFILE_SCHEMA_VERSION).toBe(4);
   });
 
   it('gives new fields safe empty defaults', () => {
@@ -94,7 +119,7 @@ describe('migrateProfile', () => {
     null,
     'profile',
     [],
-    { schemaVersion: 4 },
+    { schemaVersion: 5 },
     { schemaVersion: 99 },
     { schemaVersion: '1' },
     { schemaVersion: 0 },
@@ -135,9 +160,10 @@ describe('migrateProfile: version 2 → 3', () => {
     const migrated = migrateProfile(clone(phase9Profile));
     const currentEmployment: Record<string, unknown> = { ...phase9Profile.experience };
     delete currentEmployment.workHistory;
-    expect(migrated).toEqual({
+    expectIds(migrated);
+    expect(stripIds(migrated)).toEqual({
       ...phase9Profile,
-      schemaVersion: 3,
+      schemaVersion: 4,
       education: [phase9Profile.education],
       experience: currentEmployment,
       workExperience: [],
@@ -176,7 +202,7 @@ describe('migrateProfile: version 2 → 3', () => {
         workModes: ['remote'],
       },
     });
-    expect(migrated?.education).toEqual([
+    expect(stripIds(migrated)?.education).toEqual([
       phase9Profile.education,
       { institution: 'First College', graduationYear: 2015 },
     ]);
@@ -199,7 +225,7 @@ describe('migrateProfile: version 2 → 3', () => {
       ...clone(phase9Profile),
       experience: { ...phase9Profile.experience, workHistory },
     });
-    expect(migrated?.workExperience).toEqual([workHistory[0]]);
+    expect(stripIds(migrated)?.workExperience).toEqual([workHistory[0]]);
     expect(migrated?.experience).not.toHaveProperty('workHistory');
   });
 
@@ -217,16 +243,19 @@ describe('migrateProfile: version 2 → 3', () => {
     expect(stored).toEqual(phase9Profile);
   });
 
-  it('keeps a version 3 profile with records as is, ignoring malformed entries', () => {
+  it('keeps a version 3 profile with records as is (adding ids), ignoring malformed entries', () => {
     const current = {
       ...createEmptyProfile(),
+      schemaVersion: 3,
       education: [{ institution: 'A' }, { institution: 'B' }],
       workExperience: [{ company: 'C', current: true }],
       certifications: [{ name: 'D' }],
     };
-    expect(migrateProfile(clone(current))).toEqual(current);
+    const migrated = migrateProfile(clone(current));
+    expectIds(migrated);
+    expect(stripIds(migrated)).toEqual({ ...current, schemaVersion: 4 });
     expect(
-      migrateProfile({ ...clone(current), certifications: ['x', null, { name: 'D' }] })
+      stripIds(migrateProfile({ ...clone(current), certifications: ['x', null, { name: 'D' }] }))
         ?.certifications,
     ).toEqual([{ name: 'D' }]);
   });

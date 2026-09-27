@@ -6,10 +6,12 @@ import {
   type FieldApproval,
   type PageScan,
   type ProfileRecordCounts,
+  type RecordChoicesByCollection,
   type ReviewedMapping,
 } from '../messaging/protocol';
 import { BUILD_ID } from '../build-info';
 import { sendToServiceWorker, sendToTab } from '../messaging/send';
+import { pageKeyOf } from '../messaging/validate';
 
 export type AnalysisFailure =
   | 'no-active-tab'
@@ -28,6 +30,8 @@ export type AnalysisResult =
       tabId: number;
       /** Hostname of the page, recorded with taught mappings for display. */
       site?: string;
+      /** The page (origin + path) record assignments are scoped to; absent for non-web pages. */
+      page?: string;
       scan: PageScan;
       mappings: ReviewedMapping[];
       records: ProfileRecordCounts;
@@ -93,13 +97,18 @@ export async function analyzeActiveTab(): Promise<AnalysisResult> {
   if (!isPageScan(response.data)) return failure('scan-failed');
   const scan = response.data;
 
-  const mapped = await sendToServiceWorker(MessageType.MapFields, { fields: scan.fields });
+  const page = pageKeyOf(tab.url);
+  const mapped = await sendToServiceWorker(MessageType.MapFields, {
+    fields: scan.fields,
+    ...(page ? { page } : {}),
+  });
   if (!mapped.ok) return failure('profile-unavailable');
   const site = siteOf(tab.url);
   return {
     ok: true,
     tabId: tab.id,
     ...(site ? { site } : {}),
+    ...(page ? { page } : {}),
     scan,
     mappings: mapped.data.mappings,
     records: mapped.data.records,
@@ -113,8 +122,13 @@ export async function analyzeActiveTab(): Promise<AnalysisResult> {
 export async function fillApprovedFields(
   tabId: number,
   approvals: FieldApproval[],
+  page?: string,
 ): Promise<FillResult[] | undefined> {
-  const response = await sendToServiceWorker(MessageType.FillPage, { tabId, approvals });
+  const response = await sendToServiceWorker(MessageType.FillPage, {
+    tabId,
+    approvals,
+    ...(page ? { page } : {}),
+  });
   return response.ok && isFillResultList(response.data.results) ? response.data.results : undefined;
 }
 
@@ -133,6 +147,33 @@ export async function teachMapping(
     ...(site ? { site } : {}),
   });
   return response.ok ? response.data.mapping : undefined;
+}
+
+/**
+ * Explicit record assignment for a repeated field on this page. Returns the field's updated
+ * mapping for review (assigned, not selected). Never fills anything.
+ */
+export async function assignRecord(
+  page: string,
+  field: FormField,
+  target: string,
+): Promise<ReviewedMapping | undefined> {
+  const response = await sendToServiceWorker(MessageType.SaveAssignment, { page, field, target });
+  return response.ok ? response.data.mapping : undefined;
+}
+
+export async function removeRecordAssignment(
+  page: string,
+  field: FormField,
+): Promise<ReviewedMapping | undefined> {
+  const response = await sendToServiceWorker(MessageType.DeleteAssignment, { page, field });
+  return response.ok ? response.data.mapping : undefined;
+}
+
+/** The profile's records to choose from, labeled; fetched only when assigning. */
+export async function loadRecordChoices(): Promise<RecordChoicesByCollection | undefined> {
+  const response = await sendToServiceWorker(MessageType.GetRecordChoices);
+  return response.ok ? response.data.records : undefined;
 }
 
 /**

@@ -7,7 +7,17 @@ import type { Profile } from './profile';
  */
 export function countProfileValues(profile: Profile): number {
   // Legacy data is kept from older versions but is not part of the usable profile.
-  return countValues({ ...profile, schemaVersion: undefined, legacy: undefined });
+  const withoutIds = (records: readonly object[]) =>
+    records.map((record) => ({ ...record, id: undefined }));
+  return countValues({
+    ...profile,
+    schemaVersion: undefined,
+    legacy: undefined,
+    // Record ids identify records; they are not values the user entered.
+    education: withoutIds(profile.education),
+    workExperience: withoutIds(profile.workExperience),
+    certifications: withoutIds(profile.certifications),
+  });
 }
 
 function countValues(value: unknown): number {

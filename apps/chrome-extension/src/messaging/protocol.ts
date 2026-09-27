@@ -13,6 +13,7 @@ import {
   isFormField,
   isHostname,
   isMappingKey,
+  isPageKey,
   isRecord,
 } from './validate';
 
@@ -50,6 +51,12 @@ export const MessageType = {
   ClearMappings: 'applyonce/clear-mappings',
   /** Which build the service worker runs, to detect a stale worker. Extension pages only. */
   GetRuntimeInfo: 'applyonce/get-runtime-info',
+  /** Assign a repeated field on a page to one profile record. Extension pages only. */
+  SaveAssignment: 'applyonce/save-assignment',
+  /** Remove a field's record assignment. Extension pages only. */
+  DeleteAssignment: 'applyonce/delete-assignment',
+  /** The profile's records, labeled, to choose from when assigning. Extension pages only. */
+  GetRecordChoices: 'applyonce/get-record-choices',
 } as const;
 
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
@@ -74,7 +81,25 @@ export interface PageScan {
 /** A mapping as shown for review: whether the profile has a value, never the value. */
 export interface ReviewedMapping extends FieldMapping {
   hasValue: boolean;
+  /**
+   * For record assignments: the record's current position and field, e.g.
+   * "Education 2 → Degree" (the stored target uses the record id, never shown).
+   */
+  targetLabel?: string;
 }
+
+/** One record to choose from when assigning, labeled for the extension UI. */
+export interface RecordChoiceView {
+  recordId: string;
+  /** "Education 2" (current position). */
+  label: string;
+  /** "University A · Master's"; may be empty. */
+  summary: string;
+}
+
+export type RecordChoicesByCollection = Readonly<
+  Record<ProfileRecordCollection, readonly RecordChoiceView[]>
+>;
 
 /** The user's approval to fill one field from one profile field. */
 export interface FieldApproval {
@@ -88,14 +113,18 @@ export interface PayloadByType {
   [MessageType.ScanPage]: undefined;
   [MessageType.GetProfile]: undefined;
   [MessageType.GetProfileStatus]: undefined;
-  [MessageType.MapFields]: { fields: FormField[] };
-  [MessageType.FillPage]: { tabId: number; approvals: FieldApproval[] };
+  /** `page` (origin + path) lets record assignments for that page apply. */
+  [MessageType.MapFields]: { fields: FormField[]; page?: string };
+  [MessageType.FillPage]: { tabId: number; approvals: FieldApproval[]; page?: string };
   [MessageType.FillFields]: { instructions: FillInstruction[] };
   [MessageType.SaveMapping]: { field: FormField; profileField: string; site?: string };
   [MessageType.ListMappings]: undefined;
   [MessageType.DeleteMapping]: { key: string };
   [MessageType.ClearMappings]: undefined;
   [MessageType.GetRuntimeInfo]: undefined;
+  [MessageType.SaveAssignment]: { page: string; field: FormField; target: string };
+  [MessageType.DeleteAssignment]: { page: string; field: FormField };
+  [MessageType.GetRecordChoices]: undefined;
 }
 
 /** Response payload for each message type. */
@@ -114,6 +143,10 @@ export interface ResponseDataByType {
   [MessageType.DeleteMapping]: { deleted: boolean };
   [MessageType.ClearMappings]: { cleared: true };
   [MessageType.GetRuntimeInfo]: { buildId: string };
+  /** The field's mapping after the change, for review. */
+  [MessageType.SaveAssignment]: { mapping: ReviewedMapping };
+  [MessageType.DeleteAssignment]: { mapping: ReviewedMapping };
+  [MessageType.GetRecordChoices]: { records: RecordChoicesByCollection };
 }
 
 export type Message<T extends MessageType = MessageType> = T extends MessageType
@@ -157,14 +190,18 @@ export const fail = (error: MessageError): { ok: false; error: MessageError } =>
 /** Payload validators; types without a payload need none. */
 const PAYLOAD_VALIDATORS: Partial<Record<MessageType, (payload: unknown) => boolean>> = {
   [MessageType.MapFields]: (p) =>
-    isRecord(p) && isBoundedArray(p.fields) && p.fields.every(isFormField),
+    isRecord(p) &&
+    isBoundedArray(p.fields) &&
+    p.fields.every(isFormField) &&
+    (p.page === undefined || isPageKey(p.page)),
   [MessageType.FillPage]: (p) =>
     isRecord(p) &&
     Number.isInteger(p.tabId) &&
     isBoundedArray(p.approvals) &&
     p.approvals.every(
       (a) => isRecord(a) && isFormField(a.field) && typeof a.profileField === 'string',
-    ),
+    ) &&
+    (p.page === undefined || isPageKey(p.page)),
   [MessageType.FillFields]: (p) =>
     isRecord(p) && isBoundedArray(p.instructions) && p.instructions.every(isFillInstruction),
   [MessageType.SaveMapping]: (p) =>
@@ -173,6 +210,9 @@ const PAYLOAD_VALIDATORS: Partial<Record<MessageType, (payload: unknown) => bool
     typeof p.profileField === 'string' &&
     (p.site === undefined || isHostname(p.site)),
   [MessageType.DeleteMapping]: (p) => isRecord(p) && isMappingKey(p.key),
+  [MessageType.SaveAssignment]: (p) =>
+    isRecord(p) && isPageKey(p.page) && isFormField(p.field) && typeof p.target === 'string',
+  [MessageType.DeleteAssignment]: (p) => isRecord(p) && isPageKey(p.page) && isFormField(p.field),
 };
 
 const MESSAGE_TYPES: ReadonlySet<string> = new Set(Object.values(MessageType));

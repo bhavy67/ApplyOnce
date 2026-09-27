@@ -147,6 +147,11 @@ export interface ProfileRecordCollectionDefinition {
   section: ProfileSection;
   /** Role of the first record, shown next to it, e.g. "primary". */
   firstRecordRole?: string;
+  /**
+   * Record fields that describe a record in the extension UI (e.g. "University A · Master's")
+   * when the user picks a record. Chosen to identify a record without sensitive details.
+   */
+  summaryFields: readonly string[];
 }
 
 export const PROFILE_RECORD_COLLECTION_DEFINITIONS: Readonly<
@@ -157,16 +162,19 @@ export const PROFILE_RECORD_COLLECTION_DEFINITIONS: Readonly<
     itemLabel: 'Education',
     section: 'Education',
     firstRecordRole: 'primary',
+    summaryFields: ['institution', 'degree'],
   },
   workExperience: {
     label: 'Work experience',
     itemLabel: 'Work experience',
     section: 'Work experience',
+    summaryFields: ['company', 'title'],
   },
   certifications: {
     label: 'Certifications',
     itemLabel: 'Certification',
     section: 'Certifications',
+    summaryFields: ['name', 'issuer'],
   },
 };
 
@@ -550,7 +558,7 @@ export type ProfileRecordTarget = `${ProfileRecordCollection}[${number}].${strin
  * What a mapping points to: a scalar key (automatic mappings and older saved mappings), or
  * a field of one specific record (taught mappings only). Stored in saved mappings.
  */
-export type ProfileTarget = ProfileFieldKey | ProfileRecordTarget;
+export type ProfileTarget = ProfileFieldKey | ProfileRecordTarget | ProfileRecordIdTarget;
 
 /** Everything needed to show, validate, and read a target. */
 export interface ProfileTargetDefinition {
@@ -562,7 +570,45 @@ export interface ProfileTargetDefinition {
   kind: ProfileValueKind;
   fieldTypes: readonly FieldType[];
   choices?: readonly ProfileChoice[];
-  record?: { collection: ProfileRecordCollection; index: number; field: string };
+  /**
+   * The record field this target reads: by position (`index`, Phase 10/11 targets) or by
+   * stable record id (`recordId`, explicit record assignments). Exactly one of them is set.
+   */
+  record?: {
+    collection: ProfileRecordCollection;
+    field: string;
+    index?: number;
+    recordId?: string;
+  };
+}
+
+/**
+ * Stable record ids: random UUIDs for new records, or "m-" + 16 hex digits for records that
+ * existed before ids (see migrate-profile.ts). Nothing else is accepted as a record id.
+ */
+const RECORD_ID =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|m-[0-9a-f]{16})$/;
+
+export function isRecordId(value: unknown): value is string {
+  return typeof value === 'string' && RECORD_ID.test(value);
+}
+
+/** A field of one record identified by its stable id, e.g. "education@<id>.degree". */
+export type ProfileRecordIdTarget = `${ProfileRecordCollection}@${string}.${string}`;
+
+const RECORD_ID_TARGET = /^(education|workExperience|certifications)@([^.]+)\.([A-Za-z]+)$/;
+
+/** Only explicit record assignments use id targets; mapping never produces them. */
+export function recordIdTarget(
+  collection: ProfileRecordCollection,
+  recordId: string,
+  field: string,
+): ProfileRecordIdTarget {
+  return `${collection}@${recordId}.${field}`;
+}
+
+export function isRecordIdTarget(value: unknown): value is ProfileRecordIdTarget {
+  return typeof value === 'string' && RECORD_ID_TARGET.test(value) && isProfileTarget(value);
 }
 
 const RECORD_TARGET = /^(education|workExperience|certifications)\[(0|[1-9][0-9]?)\]\.([A-Za-z]+)$/;
@@ -595,6 +641,21 @@ export function resolveProfileTarget(value: unknown): ProfileTargetDefinition | 
     };
   }
   if (typeof value !== 'string') return undefined;
+  const byId = RECORD_ID_TARGET.exec(value);
+  if (byId) {
+    const collection = byId[1] as ProfileRecordCollection;
+    const definition = findRecordField(collection, byId[3] ?? '');
+    if (!definition || !isRecordId(byId[2])) return undefined;
+    return {
+      target: value as ProfileRecordIdTarget,
+      // The record's current position is not known here; the UI labels it from the profile.
+      label: `${PROFILE_RECORD_COLLECTION_DEFINITIONS[collection].itemLabel} → ${definition.label}`,
+      path: value,
+      kind: definition.kind,
+      fieldTypes: definition.fieldTypes,
+      record: { collection, field: definition.field, recordId: byId[2] },
+    };
+  }
   const match = RECORD_TARGET.exec(value);
   if (!match) return undefined;
   const collection = match[1] as ProfileRecordCollection;

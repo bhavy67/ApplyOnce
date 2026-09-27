@@ -2,6 +2,8 @@ import { PROFILE_FIELD_KEYS, PROFILE_FIELDS, type FieldType } from '@applyonce/c
 import { describe, expect, it } from 'vitest';
 import type { ReviewedMapping } from '../messaging/protocol';
 import {
+  assignActionLabel,
+  canAssign,
   canTeach,
   initialSelection,
   isSelectable,
@@ -318,5 +320,64 @@ describe('Phase 12: mapping line', () => {
       '→ Email (contact.email) · Automatic · High confidence',
     );
     expect(mappingLine(unknownMapping, {})).toBe('No match');
+  });
+});
+
+describe('Phase 13: record assignment in the review', () => {
+  const repeatedField = { repeatedCount: 2 };
+  const unassigned = mapping({
+    fieldId: 'r',
+    status: 'unsupported',
+    unsupportedReason: 'repeated-question',
+    profileField: undefined,
+    confidence: { score: 0, level: 'unknown', reasons: [] },
+    hasValue: false,
+    mappingKey: undefined,
+  });
+  const assigned = mapping({
+    fieldId: 'r',
+    status: 'assigned',
+    source: 'assigned',
+    profileField: 'education@aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.degree',
+    targetLabel: 'Education 1 → Degree',
+    mappingKey: undefined,
+  });
+
+  it('offers Assign record only for repeated fields without record context', () => {
+    expect(canAssign(unassigned, repeatedField)).toBe(true);
+    expect(assignActionLabel(unassigned)).toBe('Assign record');
+    expect(canAssign(unassigned, {})).toBe(false);
+    expect(
+      canAssign(unassigned, { repeatedCount: 2, record: { collection: 'education', index: 1 } }),
+    ).toBe(false);
+    expect(canAssign(readyMapping, {})).toBe(false);
+    expect(canTeach(unassigned)).toBe(false);
+  });
+
+  it('shows an assigned field by record position, never its id, unselected until approved', () => {
+    expect(mappingLine(assigned, repeatedField)).toBe('→ Education 1 → Degree · Assigned by you');
+    expect(mappingLine(assigned, repeatedField)).not.toMatch(/aaaaaaaa|education@/);
+    expect(initialSelection([assigned]).size).toBe(0);
+    expect(isSelectable(assigned)).toBe(true);
+    expect(mappingNote(assigned, false)).toBe('Assigned by you. Select to fill.');
+    expect(
+      canAssign(assigned, repeatedField) && assignActionLabel(assigned) === 'Change record',
+    ).toBe(true);
+  });
+
+  it('explains an assignment whose record was deleted', () => {
+    const unavailable = {
+      ...unassigned,
+      source: 'assigned' as const,
+      unsupportedReason: 'assignment-unavailable' as const,
+    };
+    expect(mappingLine(unavailable, repeatedField)).toBe(
+      'Assigned record no longer exists · Assigned by you',
+    );
+    expect(mappingNote(unavailable, false)).toBe(
+      'The profile record this field was assigned to no longer exists. Assign a record again. Will not be filled.',
+    );
+    expect(isSelectable(unavailable)).toBe(false);
+    expect(canAssign(unavailable, repeatedField)).toBe(true);
   });
 });

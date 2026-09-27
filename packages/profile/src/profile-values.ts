@@ -1,12 +1,15 @@
 import {
   findRecordField,
   MAX_PROFILE_RECORDS,
+  PROFILE_RECORD_COLLECTION_DEFINITIONS,
+  PROFILE_RECORD_COLLECTIONS,
   resolveProfileTarget,
   type FillValue,
   type ProfileRecordCollection,
   type ProfileTarget,
 } from '@applyonce/core';
 import type { Profile } from './profile';
+import { newRecordId } from './record-ids';
 
 /** A value as stored in the profile (what the editor shows), before fill normalization. */
 export type StoredProfileValue = string | number | boolean;
@@ -22,6 +25,11 @@ export type StoredProfileValue = string | number | boolean;
 export function getProfileValue(profile: Profile, target: string): FillValue | undefined {
   const definition = resolveProfileTarget(target);
   if (!definition) return undefined;
+  if (definition.record?.recordId !== undefined) {
+    const { collection, recordId, field } = definition.record;
+    const record = recordsOf(profile, collection).find((r) => r.id === recordId);
+    return record ? scalarValue(ownProperty(record, field)) : undefined;
+  }
   const value = readProfilePath(profile, definition.path);
   if (value !== undefined || definition.target !== 'full_name') return value;
 
@@ -36,7 +44,10 @@ export function getProfileValue(profile: Profile, target: string): FillValue | u
  * so paths like "__proto__" or ones ending at an object or list yield undefined.
  */
 export function readProfilePath(profile: Profile, path: string): FillValue | undefined {
-  const value = readRaw(profile, path);
+  return scalarValue(readRaw(profile, path));
+}
+
+function scalarValue(value: unknown): FillValue | undefined {
   if (typeof value === 'string') return value.trim() === '' ? undefined : value.trim();
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
   if (typeof value === 'boolean') return value;
@@ -70,6 +81,8 @@ export function updateProfileValue(
   if (!definition) throw new Error('Unknown profile field');
   if (definition.record) {
     const { collection, index, field } = definition.record;
+    // The editor writes by position; id targets are for filling only.
+    if (index === undefined) throw new Error('Record id targets cannot be written');
     return updateRecordValue(profile, collection, index, field, value);
   }
   const [section, property] = splitPath(definition.path);
@@ -106,10 +119,54 @@ export function canAddRecord(profile: Profile, collection: ProfileRecordCollecti
   return recordCount(profile, collection) < MAX_PROFILE_RECORDS;
 }
 
-/** Appends an empty record for editing. Blank records are dropped when the profile is saved. */
+/**
+ * Appends an empty record, with a new stable id, for editing. Blank records are dropped when
+ * the profile is saved.
+ */
 export function addRecord(profile: Profile, collection: ProfileRecordCollection): Profile {
   if (!canAddRecord(profile, collection)) return profile;
-  return withRecords(profile, collection, [...recordsOf(profile, collection), {}]);
+  return withRecords(profile, collection, [
+    ...recordsOf(profile, collection),
+    { id: newRecordId() },
+  ]);
+}
+
+/** The current position of the record with this id, or -1 when it no longer exists. */
+export function recordIndexById(
+  profile: Profile,
+  collection: ProfileRecordCollection,
+  recordId: string,
+): number {
+  return recordsOf(profile, collection).findIndex((record) => record.id === recordId);
+}
+
+export interface RecordChoice {
+  recordId: string;
+  /** Current position (0-based), for "Education 2". */
+  index: number;
+  /** Summary values for the extension UI, e.g. "University A · Master's". */
+  summary: string;
+}
+
+/**
+ * Each collection's records as choices for explicit record assignment, in their current
+ * order: id, position, and a short summary from the collection's summary fields (never
+ * contact details). For extension pages only; never sent to web pages.
+ */
+export function recordChoices(profile: Profile): Record<ProfileRecordCollection, RecordChoice[]> {
+  const choices = {} as Record<ProfileRecordCollection, RecordChoice[]>;
+  for (const collection of PROFILE_RECORD_COLLECTIONS) {
+    const { summaryFields } = PROFILE_RECORD_COLLECTION_DEFINITIONS[collection];
+    choices[collection] = recordsOf(profile, collection).flatMap((record, index) => {
+      if (typeof record.id !== 'string') return [];
+      const summary = summaryFields
+        .map((field) => scalarValue(record[field]))
+        .filter((value) => value !== undefined)
+        .join(' · ');
+      return [{ recordId: record.id, index, summary }];
+    });
+  }
+  return choices;
 }
 
 export function removeRecord(
@@ -163,7 +220,7 @@ export function updateRecordValue(
     if (value === undefined) return profile;
     if (!canAddRecord(profile, collection)) throw new Error('Too many records');
   }
-  const current = records[index] ?? {};
+  const current = records[index] ?? { id: newRecordId() };
   const others = Object.entries(current).filter(([name]) => name !== field);
   const next = Object.fromEntries(value === undefined ? others : [...others, [field, value]]);
   const updated = [...records];
@@ -171,10 +228,11 @@ export function updateRecordValue(
   return withRecords(profile, collection, updated);
 }
 
-/** A record with no entered value (blank text counts as none). */
+/** A record with no entered value (blank text counts as none; its id is not a value). */
 export function isBlankRecord(record: object): boolean {
-  return Object.values(record).every(
-    (value) => value === undefined || (typeof value === 'string' && value.trim() === ''),
+  return Object.entries(record).every(
+    ([key, value]) =>
+      key === 'id' || value === undefined || (typeof value === 'string' && value.trim() === ''),
   );
 }
 

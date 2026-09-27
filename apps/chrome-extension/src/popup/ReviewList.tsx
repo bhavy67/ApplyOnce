@@ -1,8 +1,20 @@
 import type { FillResult, FormField } from '@applyonce/core';
-import { useId, useState } from 'react';
-import type { ProfileRecordCounts, ReviewedMapping } from '../messaging/protocol';
-import { fieldDisplayName } from './analyze-page';
+import { useEffect, useId, useState } from 'react';
 import {
+  PROFILE_RECORD_COLLECTION_DEFINITIONS,
+  PROFILE_RECORD_COLLECTIONS,
+  recordFieldsOf,
+  recordIdTarget,
+} from '@applyonce/core';
+import type {
+  ProfileRecordCounts,
+  RecordChoicesByCollection,
+  ReviewedMapping,
+} from '../messaging/protocol';
+import { fieldDisplayName, loadRecordChoices } from './analyze-page';
+import {
+  assignActionLabel,
+  canAssign,
   canTeach,
   FILL_STATUS_LABELS,
   isSelectable,
@@ -23,6 +35,9 @@ interface ReviewListProps {
   onToggle: (fieldId: string, selected: boolean) => void;
   /** Saves a taught mapping; resolves to an error message, or undefined on success. */
   onTeach: (field: FormField, profileField: string) => Promise<string | undefined>;
+  /** Assigns a repeated field to one profile record; absent where assignment is unavailable. */
+  onAssign?: (field: FormField, target: string) => Promise<string | undefined>;
+  onUnassign: (field: FormField) => Promise<string | undefined>;
 }
 
 /** Each detected field with its mapping, source, and fill state. Never shows values. */
@@ -53,7 +68,10 @@ function ReviewItem({
   disabled,
   onToggle,
   onTeach,
+  onAssign,
+  onUnassign,
 }: ReviewItemProps) {
+  const [assigning, setAssigning] = useState(false);
   const checkboxId = useId();
   const [teaching, setTeaching] = useState(false);
   const isSelected = selected.has(field.id);
@@ -108,7 +126,141 @@ function ReviewItem({
             {teachActionLabel(mapping)}
           </button>
         ))}
+      {onAssign &&
+        canAssign(mapping, field) &&
+        (assigning ? (
+          <AssignEditor
+            field={field}
+            current={mapping.source === 'assigned' ? mapping.profileField : undefined}
+            onCancel={() => setAssigning(false)}
+            onSave={async (target) => {
+              const error = await onAssign(field, target);
+              if (!error) setAssigning(false);
+              return error;
+            }}
+          />
+        ) : (
+          <div className="assign-actions">
+            <button
+              type="button"
+              className="link assign"
+              disabled={disabled}
+              onClick={() => setAssigning(true)}
+            >
+              {assignActionLabel(mapping)}
+            </button>
+            {mapping.source === 'assigned' && (
+              <button
+                type="button"
+                className="link unassign"
+                disabled={disabled}
+                onClick={() => void onUnassign(field)}
+              >
+                Remove assignment
+              </button>
+            )}
+          </div>
+        ))}
     </li>
+  );
+}
+
+interface AssignEditorProps {
+  field: FormField;
+  current: string | undefined;
+  onSave: (target: string) => Promise<string | undefined>;
+  onCancel: () => void;
+}
+
+/**
+ * Choose one specific profile record and field for a repeated question: records are grouped
+ * as "Education 2 — University A · Master's" (current order), with the fields this control
+ * can hold. Record ids stay in option values only; they are never shown.
+ */
+function AssignEditor({ field, current, onSave, onCancel }: AssignEditorProps) {
+  const selectId = useId();
+  const [choices, setChoices] = useState<RecordChoicesByCollection | null>();
+  const [choice, setChoice] = useState(current ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    let cancelled = false;
+    loadRecordChoices().then(
+      (loaded) => !cancelled && setChoices(loaded ?? null),
+      () => !cancelled && setChoices(null),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const groups = choices
+    ? PROFILE_RECORD_COLLECTIONS.flatMap((collection) => {
+        const fields = recordFieldsOf(collection).filter(
+          (f) => f.teachable && f.fieldTypes.includes(field.type),
+        );
+        if (fields.length === 0) return [];
+        return choices[collection].map((record) => ({
+          label: record.summary ? `${record.label} — ${record.summary}` : record.label,
+          options: fields.map((f) => ({
+            value: recordIdTarget(collection, record.recordId, f.field),
+            text: `${record.label} → ${f.label}`,
+          })),
+        }));
+      })
+    : [];
+
+  async function save() {
+    setSaving(true);
+    setError(await onSave(choice));
+    setSaving(false);
+  }
+
+  return (
+    <div className="teach-editor assign-editor">
+      <label htmlFor={selectId}>Assign to record</label>
+      {choices === undefined ? (
+        <p className="note">Loading your records…</p>
+      ) : groups.length === 0 ? (
+        <p className="note">
+          {choices === null
+            ? 'Your records could not be loaded.'
+            : `No ${PROFILE_RECORD_COLLECTIONS.map((c) => PROFILE_RECORD_COLLECTION_DEFINITIONS[c].label.toLowerCase()).join(', ')} records can hold this field. Add them on the profile page.`}
+        </p>
+      ) : (
+        <select id={selectId} value={choice} onChange={(event) => setChoice(event.target.value)}>
+          <option value="">Choose a record and field…</option>
+          {groups.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.text}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      )}
+      <div className="teach-actions">
+        <button
+          type="button"
+          className="small"
+          disabled={!choice || saving}
+          onClick={() => void save()}
+        >
+          {saving ? 'Saving…' : 'Save assignment'}
+        </button>
+        <button type="button" className="small secondary" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+      {error && (
+        <p className="message error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

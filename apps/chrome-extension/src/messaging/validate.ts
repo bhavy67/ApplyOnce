@@ -79,7 +79,9 @@ export function isFillInstruction(value: unknown): value is FillInstruction {
     typeof expected.type === 'string' &&
     isFieldType(expected.type) &&
     ['name', 'htmlId', 'label'].every((key) => isOptionalString(expected[key])) &&
-    (expected.record === undefined || isFieldRecord(expected.record))
+    (expected.record === undefined || isFieldRecord(expected.record)) &&
+    (expected.repeatedCount === undefined ||
+      (Number.isInteger(expected.repeatedCount) && (expected.repeatedCount as number) > 1))
   );
 }
 
@@ -93,6 +95,21 @@ function isFieldRecord(value: unknown): boolean {
     (value.index as number) >= 0 &&
     (value.index as number) < MAX_PROFILE_RECORDS
   );
+}
+
+/** The page a record assignment belongs to: origin + path, without query or fragment. */
+export function pageKeyOf(url: string | undefined): string | undefined {
+  try {
+    const parsed = new URL(url ?? '');
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+    return parsed.origin + parsed.pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+export function isPageKey(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 2048 && pageKeyOf(value) === value;
 }
 
 /** A bare hostname (no scheme, port, or path), e.g. "jobs.example.com". */

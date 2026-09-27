@@ -9,6 +9,7 @@ import {
   type WorkMode,
 } from './profile';
 import { isBlankRecord } from './profile-values';
+import { withRecordIds } from './record-ids';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -23,10 +24,15 @@ type UnknownRecord = Record<string, unknown>;
  *
  * Version 2 → 3 (see migrateV2ToV3): the primary education record becomes education[0],
  * work history moves to `workExperience`, and certifications start empty.
+ *
+ * Version 3 → 4: every record gets a stable id (withRecordIds): records stored without one
+ * get a derived id, identical on every load until the profile is saved with it. Values are
+ * unchanged. Loading still never writes.
  */
 export function migrateProfile(stored: unknown): Profile | undefined {
   if (!isRecord(stored)) return undefined;
   if (stored.schemaVersion === PROFILE_SCHEMA_VERSION) return withDefaults(stored);
+  if (stored.schemaVersion === 3) return withDefaults(stored);
   if (stored.schemaVersion === 2) return withDefaults(migrateV2ToV3(stored));
   if (stored.schemaVersion === 1) return withDefaults(migrateV2ToV3(migrateV1ToV2(stored)));
   return undefined;
@@ -123,7 +129,7 @@ function withDefaults(stored: UnknownRecord): Profile {
   };
 
   const records = <K extends 'education' | 'workExperience' | 'certifications'>(key: K) =>
-    asArray(stored[key]).filter(isRecord) as unknown as Profile[K];
+    withRecordIds(key, asArray(stored[key]).filter(isRecord)) as unknown as Profile[K];
   const documents = section('documents');
   const profile: Profile = {
     schemaVersion: PROFILE_SCHEMA_VERSION,

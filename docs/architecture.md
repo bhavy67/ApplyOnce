@@ -54,16 +54,22 @@ review.
 
 ## Profile schema and migration
 
-`PROFILE_SCHEMA_VERSION` is 3. `migrateProfile` (`packages/profile`) is pure and
+`PROFILE_SCHEMA_VERSION` is 4 (Phase 13: every record has a stable `id`). `migrateProfile` (`packages/profile`) is pure and
 idempotent, and chains steps: version 1 (Phases 1–4) → 2 reduces the education list, work
 modes, and employment types to single primary values, keeping additional entries under
 `profile.legacy`; version 2 (Phases 5–9) → 3 turns the primary education object into
 `education[0]` (followed by any legacy education entries; blank data creates no record),
 moves `experience.workHistory` to `workExperience`, and adds `certifications: []`. Current
-employment is untouched and nothing is fabricated. Version 3 gets missing sections filled
-with empty defaults and non-object records dropped. Unknown or newer versions return
+employment is untouched and nothing is fabricated. Version 3 → 4 only adds record ids:
+`withRecordIds` (`record-ids.ts`, also run on every load) keeps valid unique ids and gives any
+other record `derivedRecordId` ("m-" + 16 hex of an FNV hash of collection, stored position,
+and content) — deterministic, so all contexts agree before the first save, and never
+recomputed once stored. New records get `crypto.randomUUID()` (`addRecord`, and a primary
+field written with no record yet). Missing sections get empty defaults and non-object
+records are dropped. Unknown or newer versions return
 undefined and `ProfileRepository.load` throws, so data is refused rather than overwritten.
-Loading never writes; the next save stores version 3. `sanitizeProfile` drops completely
+Loading never writes; the next save stores version 4. Ids are not values: `isBlankRecord`
+and `countProfileValues` ignore them, and no editor path writes them. `sanitizeProfile` drops completely
 blank records on save.
 
 Saved mappings need no migration: their `profileField` was always a scalar key, which is
@@ -219,6 +225,24 @@ them, and `fillFields` skips a field whose fresh scan shows `repeatedCount > 1`
 ("now appears more than once"). The popup shows "Repeated question · no record context"
 (`mappingLine`) for such fields; unknown questions inside recognized record blocks keep
 "No match".
+
+**Explicit record assignment (Phase 13).** Record-id targets
+(`<collection>@<recordId>.<field>`, `recordIdTarget`) resolve only against the definitions
+(`resolveProfileTarget`, record `recordId`) and, for a value, an existing record with that id
+in that collection (`getProfileValue`); the editor cannot write through them, saved mappings
+never use them (`usableSavedTarget`), and automatic mapping never produces them. Assignments
+live in their own repository (`storage/record-assignment-repository.ts`, key
+`recordAssignments`, separate from the profile and `savedMappings`): page key (origin +
+path), field id, `AssignedField` metadata (type, name, id, label, repeat count; never values),
+and the target. The service worker applies them after `mapFields` with
+`applyRecordAssignments` (`field-mapper/record-assignments.ts`), and only to fields
+`isAssignableField` (repeated, no `record`, mapped `repeated-question`): an existing record →
+status `assigned` / source `assigned` (never preselected); a missing record → `unsupported` /
+`assignment-unavailable`. `ReviewedMapping.targetLabel` carries "Education 2 → Degree" from
+the record's current position. Messages: `MapFields` / `FillPage` carry `page`;
+`SaveAssignment`, `DeleteAssignment`, `GetRecordChoices` are extension-only. For an assigned
+field the fill instruction carries only `expected.repeatedCount` (never the record);
+`fillFields` fills a repeated field only when that count is unchanged.
 
 **Search fields (Phase 9).** `fillFields` accepts a `fillCustom` hook: a site adapter's
 filler for custom controls, tried before the generic engine (returning `undefined` hands

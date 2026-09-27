@@ -96,9 +96,14 @@ async function fillOne(
     return { status: 'not-found', message: 'The field is no longer on the page.' };
   }
   const { field, controls } = target;
-  // Re-checked on the page as it is now: a question that has become repeated since Analyze
-  // no longer identifies one profile record.
-  if ((field.repeatedCount ?? 1) > 1) {
+  // Re-checked on the page as it is now. A repeated question is filled only when the user
+  // assigned this field to a profile record, and only if the repetition is unchanged since
+  // Analyze; a question that has become repeated no longer identifies one profile record.
+  if (expected.repeatedCount !== undefined) {
+    if (field.repeatedCount !== expected.repeatedCount) {
+      return skipped('The repeated questions on the page changed. Analyze again.');
+    }
+  } else if ((field.repeatedCount ?? 1) > 1) {
     return skipped('This question now appears more than once on the page. Analyze again.');
   }
   if (!field.visible) return skipped('The field is hidden now.');

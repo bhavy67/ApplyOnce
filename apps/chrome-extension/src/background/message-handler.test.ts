@@ -9,6 +9,7 @@ import {
   type ExtensionStorageSchema,
   type ProfileRepository,
 } from '../storage/profile-repository';
+import { createRecordAssignmentRepository } from '../storage/record-assignment-repository';
 import { createSavedMappingRepository } from '../storage/saved-mapping-repository';
 import { createServiceWorkerMessageHandler, type FillInTab } from './message-handler';
 
@@ -78,6 +79,7 @@ async function setup(saved?: Profile, fillInTab: FillInTab = recordingFillInTab(
   const handle = createServiceWorkerMessageHandler({
     repository: createProfileRepository(store),
     mappings: createSavedMappingRepository(store),
+    assignments: createRecordAssignmentRepository(store),
     extensionOrigin: ORIGIN,
     fillInTab,
   });
@@ -162,6 +164,12 @@ describe('failures and side effects', () => {
     const handle = createServiceWorkerMessageHandler({
       repository: failingRepository,
       mappings: createSavedMappingRepository(
+        createIndexedDbStore<ExtensionStorageSchema>({
+          databaseName: 'x',
+          factory: new IDBFactory(),
+        }),
+      ),
+      assignments: createRecordAssignmentRepository(
         createIndexedDbStore<ExtensionStorageSchema>({
           databaseName: 'x',
           factory: new IDBFactory(),
@@ -1221,5 +1229,287 @@ describe('Phase 12: repeated questions without record context', () => {
     expect(calls.map((c) => c.instructions.map((i) => [i.fieldId, i.value]))).toEqual([
       [['id:single', 'Degree B']],
     ]);
+  });
+});
+
+describe('Phase 13: explicit record assignment', () => {
+  const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const W1 = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const PAGE = 'https://jobs.example.com/apply';
+  const profile13: Profile = {
+    ...sampleProfile,
+    schemaVersion: 4,
+    education: [
+      { id: A, institution: 'University A', degree: 'Degree A' },
+      { id: B, institution: 'University B', degree: 'Degree B' },
+    ],
+    workExperience: [{ id: W1, company: 'Company A', title: 'Title A' }],
+  };
+  const degree = (id: string): FormField => ({
+    ...field(id, 'text', { htmlId: id.slice(3), label: 'Degree' }),
+    repeatedCount: 2,
+  });
+  const [d1, d2] = [degree('id:d1'), degree('id:d2')];
+  const university = field('id:uni', 'text', { htmlId: 'uni', label: 'University' });
+  type Handle = Awaited<ReturnType<typeof setup>>['handle'];
+  const assign = (handle: Handle, f: FormField, target: string, sender = EXTENSION_PAGE) =>
+    handle({ type: MessageType.SaveAssignment, payload: { page: PAGE, field: f, target } }, sender);
+  const map = async (handle: Handle, fields: FormField[], page: string | null = PAGE) => {
+    const response = await handle(
+      { type: MessageType.MapFields, payload: { fields, ...(page ? { page } : {}) } },
+      EXTENSION_PAGE,
+    );
+    return (response as { data: { mappings: ReviewedMapping[] } }).data.mappings;
+  };
+  const fillAll = (handle: Handle, approvals: { field: FormField; profileField: string }[]) =>
+    handle(
+      { type: MessageType.FillPage, payload: { tabId: 5, approvals, page: PAGE } },
+      EXTENSION_PAGE,
+    );
+
+  it('assigns repeated fields to specific records; they stay unselected and unfilled', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile13, fillInTab);
+    expect((await map(handle, [d1, d2]))[0]).toMatchObject({
+      status: 'unsupported',
+      unsupportedReason: 'repeated-question',
+    });
+    const saved = await assign(handle, d1, `education@${A}.degree`);
+    expect(saved).toMatchObject({
+      ok: true,
+      data: {
+        mapping: {
+          status: 'assigned',
+          source: 'assigned',
+          profileField: `education@${A}.degree`,
+          hasValue: true,
+          targetLabel: 'Education 1 → Degree',
+        },
+      },
+    });
+    await assign(handle, d2, `education@${B}.degree`);
+    expect((await map(handle, [d1, d2])).map((m) => [m.status, m.targetLabel])).toEqual([
+      ['assigned', 'Education 1 → Degree'],
+      ['assigned', 'Education 2 → Degree'],
+    ]);
+    expect(calls).toEqual([]);
+  });
+
+  it('fills only approved assigned fields, with their record values and no record ids', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile13, fillInTab);
+    await assign(handle, d1, `education@${A}.degree`);
+    await assign(handle, d2, `education@${B}.degree`);
+    await fillAll(handle, [
+      { field: d1, profileField: `education@${A}.degree` },
+      { field: d2, profileField: `education@${B}.degree` },
+      { field: university, profileField: 'institution' },
+    ]);
+    expect(calls[0]?.instructions).toEqual([
+      {
+        fieldId: 'id:d1',
+        value: 'Degree A',
+        expected: { type: 'text', htmlId: 'd1', label: 'Degree', repeatedCount: 2 },
+      },
+      {
+        fieldId: 'id:d2',
+        value: 'Degree B',
+        expected: { type: 'text', htmlId: 'd2', label: 'Degree', repeatedCount: 2 },
+      },
+      {
+        fieldId: 'id:uni',
+        value: 'University A',
+        expected: { type: 'text', htmlId: 'uni', label: 'University' },
+      },
+    ]);
+    expect(JSON.stringify(calls)).not.toMatch(new RegExp(`${A}|${B}|education@|recordId`));
+  });
+
+  it('follows the stable id after the profile is reordered (not the position)', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle, store } = await setup(profile13, fillInTab);
+    await assign(handle, d1, `education@${A}.degree`);
+    await assign(handle, d2, `education@${B}.degree`);
+    await store.set('profile', {
+      ...profile13,
+      education: [profile13.education[1] ?? {}, profile13.education[0] ?? {}],
+    });
+    expect((await map(handle, [d1, d2])).map((m) => m.targetLabel)).toEqual([
+      'Education 2 → Degree',
+      'Education 1 → Degree',
+    ]);
+    await fillAll(handle, [
+      { field: d1, profileField: `education@${A}.degree` },
+      { field: d2, profileField: `education@${B}.degree` },
+    ]);
+    expect(calls[0]?.instructions.map((i) => i.value)).toEqual(['Degree A', 'Degree B']);
+  });
+
+  it('uses the edited value of the same record', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle, store } = await setup(profile13, fillInTab);
+    await assign(handle, d1, `education@${A}.degree`);
+    await store.set('profile', {
+      ...profile13,
+      education: [
+        { id: A, institution: 'University A', degree: 'Degree A (new)' },
+        profile13.education[1] ?? {},
+      ],
+    });
+    await fillAll(handle, [{ field: d1, profileField: `education@${A}.degree` }]);
+    expect(calls[0]?.instructions.map((i) => i.value)).toEqual(['Degree A (new)']);
+  });
+
+  it('a deleted record makes the assignment unavailable: never another record, never inherited', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle, store } = await setup(profile13, fillInTab);
+    await assign(handle, d1, `education@${A}.degree`);
+    await store.set('profile', { ...profile13, education: [profile13.education[1] ?? {}] });
+    expect((await map(handle, [d1, d2]))[0]).toMatchObject({
+      status: 'unsupported',
+      unsupportedReason: 'assignment-unavailable',
+      hasValue: false,
+    });
+    expect(
+      await fillAll(handle, [{ field: d1, profileField: `education@${A}.degree` }]),
+    ).toMatchObject({
+      data: { results: [{ status: 'failed' }] },
+    });
+    // A new record gets a new id and does not inherit the assignment.
+    const C = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    await store.set('profile', {
+      ...profile13,
+      education: [
+        { id: C, institution: 'University C', degree: 'Degree C' },
+        profile13.education[1] ?? {},
+      ],
+    });
+    expect((await map(handle, [d1, d2]))[0]).toMatchObject({
+      unsupportedReason: 'assignment-unavailable',
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('remapping replaces the assignment; only the new record can be sent', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile13, fillInTab);
+    await assign(handle, d1, `education@${A}.degree`);
+    await assign(handle, d1, `education@${B}.degree`);
+    const results = await fillAll(handle, [
+      { field: d1, profileField: `education@${A}.degree` },
+      { field: d1, profileField: `education@${B}.degree` },
+    ]);
+    expect(results).toMatchObject({
+      data: { results: [{ status: 'failed' }, { status: 'filled' }] },
+    });
+    expect(calls[0]?.instructions.map((i) => i.value)).toEqual(['Degree B']);
+    expect(
+      await handle(
+        { type: MessageType.DeleteAssignment, payload: { page: PAGE, field: d1 } },
+        EXTENSION_PAGE,
+      ),
+    ).toMatchObject({
+      data: { mapping: { status: 'unsupported', unsupportedReason: 'repeated-question' } },
+    });
+  });
+
+  it('isolates failures: valid A and C fill, B (deleted record) does not', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const three = { ...profile13 };
+    const fields = ['id:f1', 'id:f2', 'id:f3'].map((id) => ({ ...degree(id), repeatedCount: 3 }));
+    const { handle, store } = await setup(three, fillInTab);
+    const [f1, f2, f3] = fields as [FormField, FormField, FormField];
+    await assign(handle, f1, `education@${A}.degree`);
+    await assign(handle, f2, `education@${B}.degree`);
+    await assign(handle, f3, `education@${A}.institution`);
+    await store.set('profile', { ...profile13, education: [profile13.education[0] ?? {}] });
+    const results = await fillAll(handle, [
+      { field: f1, profileField: `education@${A}.degree` },
+      { field: f2, profileField: `education@${B}.degree` },
+      { field: f3, profileField: `education@${A}.institution` },
+    ]);
+    expect(results).toMatchObject({
+      data: { results: [{ status: 'filled' }, { status: 'failed' }, { status: 'filled' }] },
+    });
+    expect(calls[0]?.instructions.map((i) => [i.fieldId, i.value])).toEqual([
+      ['id:f1', 'Degree A'],
+      ['id:f3', 'University A'],
+    ]);
+  });
+
+  it('a stale assignment (field changed, other page, repetition changed) is not applied', async () => {
+    const { handle } = await setup(profile13);
+    await assign(handle, d1, `education@${A}.degree`);
+    expect((await map(handle, [{ ...d1, repeatedCount: 3 }]))[0]?.unsupportedReason).toBe(
+      'repeated-question',
+    );
+    expect(
+      (await map(handle, [{ ...d1, signals: { htmlId: 'd1', label: 'Degree type' } }]))[0]?.source,
+    ).toBe('automatic');
+    expect((await map(handle, [d1], 'https://jobs.example.com/other'))[0]?.status).toBe(
+      'unsupported',
+    );
+    expect((await map(handle, [d1], null))[0]?.status).toBe('unsupported');
+  });
+
+  it('refuses assignments for non-repeated fields, record sections, missing records, wrong types', async () => {
+    const { handle } = await setup(profile13);
+    const refused = [
+      await assign(handle, university, `education@${A}.institution`),
+      await assign(
+        handle,
+        { ...d1, record: { collection: 'education', index: 1 } },
+        `education@${A}.degree`,
+      ),
+      await assign(handle, d1, 'education@eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee.degree'),
+      await assign(handle, d1, `workExperience@${A}.company`),
+      await assign(handle, d1, `workExperience@${W1}.current`),
+      await assign(handle, d1, 'highest_degree'),
+      await assign(handle, d1, 'education[1].degree'),
+    ];
+    expect(refused.every((r) => !r.ok)).toBe(true);
+    expect(await assign(handle, d1, `education@${A}.degree`, WEB_PAGE)).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+  });
+
+  it('existing scalar mappings never make a repeated field fillable', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile13, fillInTab);
+    const single = field('id:single', 'text', { htmlId: 'single', label: 'Degree' });
+    await handle(
+      { type: MessageType.SaveMapping, payload: { field: single, profileField: 'highest_degree' } },
+      EXTENSION_PAGE,
+    );
+    expect((await map(handle, [d1, d2])).every((m) => m.status === 'unsupported')).toBe(true);
+    await fillAll(handle, [{ field: d1, profileField: 'highest_degree' }]);
+    expect(calls).toEqual([]);
+  });
+
+  it('record choices: labels and summaries for extension pages only; web pages are refused', async () => {
+    const { handle } = await setup({ ...profile13, contact: { email: 'jane.doe@example.com' } });
+    const choices = await handle({ type: MessageType.GetRecordChoices }, EXTENSION_PAGE);
+    expect(choices).toEqual({
+      ok: true,
+      data: {
+        records: {
+          education: [
+            { recordId: A, label: 'Education 1', summary: 'University A · Degree A' },
+            { recordId: B, label: 'Education 2', summary: 'University B · Degree B' },
+          ],
+          workExperience: [
+            { recordId: W1, label: 'Work experience 1', summary: 'Company A · Title A' },
+          ],
+          certifications: [],
+        },
+      },
+    });
+    expect(JSON.stringify(choices)).not.toContain('jane.doe@example.com');
+    expect(await handle({ type: MessageType.GetRecordChoices }, WEB_PAGE)).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
   });
 });

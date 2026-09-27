@@ -13,12 +13,16 @@ export {
   moveRecord,
   readProfilePath,
   readStoredValue,
+  recordChoices,
   recordCount,
+  recordIndexById,
   removeRecord,
   updateProfileValue,
   updateRecordValue,
+  type RecordChoice,
   type StoredProfileValue,
 } from './profile-values';
+export { derivedRecordId, newRecordId, withRecordIds } from './record-ids';
 export { sanitizeProfile } from './sanitize-profile';
 export {
   MAX_EXPERIENCE_YEARS,

@@ -223,3 +223,15 @@ body {
   display: flex;
   gap: 8px;
 }
+
+.assign-actions {
+  display: flex;
+  gap: 12px;
+  margin: 2px 0 0 22px;
+}
+
+.popup button.link.assign,
+.popup button.link.unassign {
+  align-self: flex-start;
+  font-size: 12px;
+}
