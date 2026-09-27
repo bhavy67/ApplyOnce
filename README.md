@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 6 — Generic form robustness: complete.**
+**Phase 8 — Workday adapter: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -25,8 +25,15 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 6: more reliable on real-world generic forms: wrapper labels, required markers,
   checkbox groups, read-only fields, stricter existing-value protection, and verified with
   plain HTML, React, Vue, and Angular forms. A stale background service is detected.
+- Phase 7: custom dropdowns that follow common ARIA combobox/listbox patterns are detected,
+  mapped like native selects, and filled by opening them and choosing the one matching
+  option, with the selection confirmed before reporting success.
+- Phase 8: Workday pages are detected and scanned with Workday-specific rules (scope,
+  stable field identity, hidden helpers, search inputs, repeated records), then mapped,
+  reviewed, and filled by the same generic engine. See [Workday](#workday).
 
-Nothing is ever submitted. Generic HTML forms only; Workday and Greenhouse get dedicated support in later phases.
+Nothing is ever submitted. Greenhouse gets dedicated support in a later phase; until then
+it is handled by the generic adapter.
 
 ## Repository structure
 
@@ -45,7 +52,8 @@ packages/
 adapters/
   generic/              Field scanner and filler for ordinary HTML forms (used on
                         every page)
-  workday/              Workday adapter (stub: URL detection only)
+  workday/              Workday adapter: detection and Workday-specific scanning on top of
+                        the generic adapter (current application step only)
   greenhouse/           Greenhouse adapter (stub: URL detection only)
 docs/                   Engineering notes (see docs/architecture.md)
 ```
@@ -363,6 +371,57 @@ same form are a **multi-option group** ("Preferred locations: ☐ Ahmedabad ☐ 
 profile holds single values only, so group options are never filled or taught: they show
 "One option of a multi-choice group" (or "No safe match") and stay untouched.
 
+**Custom dropdowns (ARIA comboboxes and listbox buttons).** Supports common ARIA
+combobox patterns, identified only by semantics, never by CSS class names:
+
+- `<input role="combobox">`, another element with `role="combobox"`, or a trigger with
+  `aria-haspopup="listbox"` (typically a `<button>`);
+- which declares its popup through `aria-controls`, `aria-owns`, or `aria-expanded`
+  (a control with none of these is reported as "cannot operate safely" and never touched);
+- whose popup is an element with `role="listbox"` containing `role="option"` elements,
+  referenced by `aria-controls`/`aria-owns` (directly, or as the single listbox inside the
+  referenced element) or through `aria-activedescendant`. The listbox may live anywhere,
+  e.g. rendered at the end of `<body>` (a portal), and may be created only when opened,
+  with options that appear a moment later.
+
+The control is one field of type _select_: its trigger, inner search input, hidden native
+input (`aria-hidden`), and options are not separate fields, and it maps (and is taught)
+exactly like a native `<select>` with the same question. The trigger's own text is its
+current value, never its question; a self-reference in `aria-labelledby` is ignored.
+
+Filling, only after approval, one control at a time:
+
+1. An input combobox that already contains text is left alone.
+2. The control is opened with standard DOM interaction: a press (`pointerdown`,
+   `mousedown`), then, only if nothing opened, the rest of a click; for `role="combobox"`,
+   ArrowDown as a last resort. A trigger that is a submit button is never clicked.
+3. The listbox is found only through the relationships above. None: "did not appear".
+   More than one: fails ("Several lists are attached to this control"). Multi-select lists
+   (`aria-multiselectable`) are refused.
+4. An existing selection is kept: an option with `aria-selected="true"`, or a control
+   whose displayed value equals an option. Only "Select…"-style text that is not an option
+   counts as empty.
+5. Options are read by accessible label (aria-label, aria-labelledby, else visible text
+   without `aria-hidden` decorations such as ✓) and optional value metadata (`data-value`
+   or `value`), then matched with the same rules as native selects: exact value,
+   normalized value, normalized label, then ignoring spacing/punctuation. No substring,
+   prefix, or similarity matching: "Remote / Hybrid" and "Remote work" never match
+   "remote"; two matching options fail. Disabled or hidden options are ignored; an option
+   that is itself a submit button is never clicked.
+6. The one matching option is clicked, and success requires confirmation: the option (or
+   its re-rendered equivalent) becomes `aria-selected`, or the control shows its label. For
+   widgets that show the value elsewhere, the popup is opened once more to check
+   `aria-selected`. No confirmation → "Unable to confirm the selection."
+7. Any outcome other than success closes the popup with Escape. Waits are bounded (about
+   1.5 s per step); a failure never stops the other fields.
+
+Verified in real Chrome with vanilla ARIA widgets (input combobox, button + listbox,
+listbox created on open with delayed options and `aria-controls` only while open, portal
+listbox with a hidden native input, a widget showing its value outside the control) and
+with the same dropdown patterns implemented in React 19 (including a portal), Vue 3.5
+(including `Teleport`), and Angular 22. The actual MUI or react-select libraries were
+**not** tested; only their DOM/ARIA behavior was reproduced.
+
 **Rich text / `contenteditable`: not supported.** Editors built on `contenteditable`
 (ProseMirror, Draft.js, Quill, Slate, …) keep their own document model; writing DOM text
 behind their back can be ignored or corrupt their state, and the only broadly understood
@@ -383,6 +442,59 @@ framework's state (text, email, tel, number, URL, select, radio, checkbox); exis
 are kept; review, unknown, and checkbox-group fields stay untouched; removed and
 re-rendered fields are handled; a field added later is found by Analyze again. The adapter
 uses only standard DOM behavior, with no framework-specific code.
+
+## Workday
+
+**What it is.** A thin adapter over the generic one. Only platform detection and field
+identification are Workday-specific; mapping, Teach Once, the review popup, and filling
+(native inputs, selects, and the custom-dropdown engine) are exactly the generic ones.
+
+**What it was built from.** A public Workday candidate site was inspected in Chrome
+(read-only: job search, job posting, "Start Your Application", and the apply flow's sign-in
+step). Observed: `data-automation-id` attributes on containers and controls, page containers
+`jobSearchPage`, `jobPostingPage`, `applyAdventurePage`, `applyFlowPage` (with a
+`progressBar`), `data-uxi-widget-type` attributes, generated element ids, and header chrome
+whose language selector is an `aria-haspopup="listbox"` submit button. The application
+questions themselves sit behind sign-in, which ApplyOnce never automates, so they could not
+be observed: the adapter relies on no field-level automation id values, and all selectors
+live in `adapters/workday/src/selectors.ts`.
+
+**Detection** (`detectWorkday`): a Workday host (`*.myworkdayjobs.com`,
+`*.myworkdaysite.com`, `*.myworkday.com`) or one of the page containers above is enough on
+its own; otherwise both many distinct `data-automation-id` values (≥ 10) and Workday
+widget-type attributes are required. The word "Workday" in page text is never evidence.
+Anything else uses the generic adapter, so a weak signal cannot break an ordinary form.
+Tenants on their own domains are recognised by the page containers.
+
+**Scanning** (`scanWorkday`, generic scanner plus Workday rules):
+
+- only the application step (`applyFlowPage`) when present, never the header, navigation,
+  or footer (so the language selector is not a field);
+- field identity from the control's `data-automation-id`, not generated ids, so a step that
+  re-renders with new ids is still filled; generated ids are dropped from the field;
+- one logical field per Workday field: a hidden text input next to a visible control in the
+  same automation container is a helper, not a field;
+- **search-and-select inputs** (`aria-autocomplete="list"`/`"both"`, e.g. "School or
+  University") are **not supported**: they need typing and choosing a suggestion, which
+  could not be verified on a real Workday form, so they are reported as unsupported and
+  nothing is typed into them;
+- a question that appears more than once on the step (e.g. "Job Title" in two
+  work-experience blocks) is marked repeated and never filled: the profile holds only the
+  current job and one education record. A single section's fields fill normally.
+
+**Supported controls:** text-like inputs, native selects, radio groups, single checkboxes,
+and Workday dropdowns that expose ARIA listbox relationships (through the generic custom
+dropdown engine). A dropdown without such relationships is reported as unsupported.
+Demographic, self-identification, and consent checkboxes only match if they are canonical
+profile fields, which they are not.
+
+**Current step only.** ApplyOnce never navigates: it never clicks Next, Continue, Save and
+Continue, Back, Submit, Apply, or "Add" buttons for new education or work-experience rows.
+Fill the step, move on yourself, then Analyze again. No resume or file upload, no sign-in,
+account creation, password, or one-time-code handling.
+
+Workday is configurable per tenant: sections, questions, and widgets differ between
+companies and application templates, so not every Workday form is supported.
 
 ## How the packages are built
 
@@ -417,15 +529,20 @@ single classic script, because MV3 content scripts cannot be ES modules.
 
 ## Intentionally not implemented yet
 
-- Workday and Greenhouse extraction and filling (the adapters only recognise their URLs;
-  the generic adapter is used everywhere)
+- Greenhouse extraction and filling (the adapter only recognises its URLs; the generic
+  adapter handles those pages)
+- Workday search-and-select (typed suggestion) inputs, multi-page navigation, repeated
+  record sections, and verification against a real Workday application form (it requires
+  sign-in)
 - Repeatable sections: multiple degrees, schools, employers, work history entries, or
   certifications (education and employment are single primary records)
 - Editing `legacy` values carried over by migration (they are read-only)
 - Scoping saved mappings to a site, similarity-based matching of saved mappings, and
   mapping edits from the management view (delete and re-teach instead)
-- Continuous DOM observation (MutationObserver), iframes, shadow DOM, custom widgets
-  (custom dropdowns, comboboxes), date pickers, file uploads
+- Continuous DOM observation (MutationObserver), iframes, shadow DOM, date pickers, file
+  uploads
+- Custom dropdowns without ARIA relationships, multi-select listboxes, comboboxes that
+  only work by typing a search, tree/grid/menu popups, and replacing an existing selection
 - `contenteditable` / rich-text fields (see Generic form compatibility)
 - Multi-option checkbox groups (the profile has no multi-value fields)
 - Profile completeness checks

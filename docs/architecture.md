@@ -4,7 +4,8 @@
 
 ```text
 apps/chrome-extension ──► adapters/generic ──► packages/field-mapper ──► packages/core
-          │               adapters/workday, greenhouse ───────────────────► packages/core
+          │               adapters/workday ──► adapters/generic, field-mapper, core
+          │               adapters/greenhouse ────────────────────────────► packages/core
           ├──► packages/field-mapper
           └──► packages/profile ──────────────────────────────────────────► packages/core
 ```
@@ -13,8 +14,8 @@ apps/chrome-extension ──► adapters/generic ──► packages/field-mapper
   field definitions (to resolve a key such as `city` to `location.city`, and to validate).
 - `packages/*` compile with `lib: ["ES2022"]` and no DOM or Node types, so using a browser
   API there is a type error. Keep them platform-independent.
-- `adapters/*` may use DOM types. Adapters depend on shared packages (`core`, and
-  `field-mapper` for text normalization), never on another adapter, so Workday and
+- `adapters/*` may use DOM types. Site adapters build on the generic adapter (one way:
+  `adapters/generic` never imports a site adapter) and never on each other, so Workday and
   Greenhouse logic can evolve independently.
 - Only `apps/chrome-extension` may use `chrome.*` APIs.
 
@@ -149,9 +150,20 @@ level (no `<form>` required). Each supported control becomes a `FormField` (core
 - `form`: the enclosing form's `id`/`name`/`action` attributes, when present.
 - `options`: select and radio choices. Which one is selected is not captured.
 
-Radios with the same name in the same form become one field. Workday and Greenhouse
-adapters still only detect their URLs; the content script reports the detected platform
-but always scans and fills with the generic adapter for now.
+Radios with the same name in the same form become one field.
+
+**Adapter selection (Phase 8).** The content script picks the first site adapter whose
+`detect` succeeds (Workday, Greenhouse), else the generic adapter, and reports it as the
+platform. A detected adapter scans and fills only once it is implemented (currently
+Workday); the Greenhouse stub's pages use the generic adapter. The generic scanner accepts
+`ScanOptions` (`exclude`, `stableIdentity`, `postProcess`) and `fillFields` accepts a
+`scan` function, so a site adapter reuses the whole engine and fills with the same scan it
+analyzed with. The Workday adapter (`adapters/workday`) is detection (`detect.ts`), one
+selectors file (`selectors.ts`), and a scan (`scan.ts`); see the README. Two platform-
+neutral additions support it: `FormField.repeatedCount` (mapped to `repeated-question`,
+never filled) and the `search-input` custom pattern (always unsupported). Independently,
+the custom-dropdown engine never clicks a trigger or option whose whole name is a
+navigation or submission action (Next, Continue, Save and Continue, Submit, Apply, Back, …).
 
 Phase 6 additions: a **wrapper label** rule (the only `for`-less `<label>` in the smallest
 wrapper, at most three levels up, that contains only this field), `aria-hidden` text
@@ -161,6 +173,20 @@ read-only fields and checkbox-group options `unsupported`. Questions are normali
 `normalizeQuestion` (required/optional markers removed); saved-mapping lookups also try the
 key a field had before that change (`mappingKeyCandidates`), so earlier Teach Once
 mappings keep working. `contenteditable` is deliberately not scanned.
+
+Phase 7: custom single-select controls (`[role="combobox"]`, `[aria-haspopup="listbox"]`,
+never a native select) are scanned in the same document-order pass. Each becomes one
+`FormField` of type `select` with `custom: { pattern, supported }`
+(`input-combobox` / `combobox` / `listbox-button`; supported when it has aria-controls,
+aria-owns, or aria-expanded). Elements inside a custom control and controls marked
+`aria-hidden="true"` are not fields. Labels exclude the control's own text and
+self-references in aria-labelledby. The mapper is unchanged (an unsupported control is
+`unsupported-control`). Filling goes through a separate path, `custom-select.ts`
+(`fillCustomSelect`), while native selects keep `fillSelect`; option matching is shared
+(`option-match.ts`). `fillFields` is async and sequential (`FormAdapter.fillFields` returns
+a Promise), and the content script answers FillFields asynchronously. No option or DOM
+reference is kept between analysis and fill: the control, listbox, and options are found
+again each time.
 
 `scanControls` returns the same fields with their current elements. Filling
 (`fill-fields.ts`) re-scans, finds each field by id, and requires its type and name/id (or

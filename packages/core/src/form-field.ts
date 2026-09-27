@@ -27,11 +27,38 @@ export interface FormField {
    * answer, so it is never filled.
    */
   groupSize?: number;
+  /**
+   * Set for custom (non-native) single-select controls, i.e. ARIA comboboxes and
+   * listbox popup buttons. Such fields have type "select"; only filling differs.
+   */
+  custom?: CustomControl;
+  /**
+   * Set by adapters that recognise repeated record sections (e.g. several work-experience
+   * blocks): how many fields on the page ask this same question. A scalar profile value
+   * cannot answer each of them, so such fields are never filled.
+   */
+  repeatedCount?: number;
   signals: FieldSignals;
   /** The enclosing form, when the field belongs to one. Many pages have none. */
   form?: FormContext;
   /** Choices for select/radio fields. Which choice is selected is never captured. */
   options?: readonly FieldOption[];
+}
+
+export interface CustomControl {
+  /**
+   * - input-combobox: `<input role="combobox">`
+   * - combobox: another element with role="combobox"
+   * - listbox-button: an element with aria-haspopup="listbox"
+   * - search-input: a text input whose value must be chosen from typed-search suggestions
+   *   (aria-autocomplete); never supported for filling
+   */
+  pattern: 'input-combobox' | 'combobox' | 'listbox-button' | 'search-input';
+  /**
+   * Whether the control declares a popup relationship (aria-controls, aria-owns, or
+   * aria-expanded). Unsupported controls are reported but never operated.
+   */
+  supported: boolean;
 }
 
 /** Attributes of the field's form. Each is present only when the page sets it. */

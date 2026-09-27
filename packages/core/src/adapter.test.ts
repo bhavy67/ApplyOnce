@@ -6,7 +6,7 @@ function fakeAdapter(id: string, hostname: string): FormAdapter<null> {
     id,
     detect: ({ url }) => url.includes(hostname),
     getFields: () => [],
-    fillFields: () => [],
+    fillFields: () => Promise.resolve([]),
   };
 }
 

@@ -31,6 +31,9 @@ const UNSUPPORTED_NOTES: Readonly<Record<UnsupportedReason, string>> = {
   disabled: 'Disabled field. Will not be filled.',
   readonly: 'Read-only field. Will not be filled.',
   'checkbox-group': 'One option of a multi-choice group. Will not be filled.',
+  'unsupported-control': 'Custom dropdown ApplyOnce cannot operate safely. Will not be filled.',
+  'repeated-question':
+    'This question repeats on the page (e.g. several records). Will not be filled.',
 };
 
 const FILLABLE_STATUSES: ReadonlySet<string> = new Set(['mapped', 'review', 'taught']);

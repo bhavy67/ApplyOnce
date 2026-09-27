@@ -2,41 +2,75 @@ import type {
   FieldOption,
   FillInstruction,
   FillResult,
-  FillStatus,
   FillValue,
   FormField,
 } from '@applyonce/core';
-import { compactText, normalizeText } from '@applyonce/field-mapper';
+import { normalizeText } from '@applyonce/field-mapper';
+import {
+  DEFAULT_CUSTOM_CONTROL_TIMING,
+  fillCustomSelect,
+  type CustomControlTiming,
+} from './custom-select';
+import {
+  ALREADY_MATCHES,
+  EXISTING_VALUE,
+  failed,
+  filled,
+  skipped,
+  unsupported,
+  type Outcome,
+} from './fill-outcome';
+import { findMatchingOption } from './option-match';
 import { scanControls, type FormControl, type ScannedField } from './scan-fields';
 
-type Outcome = { status: FillStatus; message: string };
+export { findMatchingOption } from './option-match';
+
 type TextControl = HTMLInputElement | HTMLTextAreaElement;
 
+export interface FillOptions {
+  /** Waits used for custom dropdowns (see custom-select.ts). */
+  customControlTiming?: CustomControlTiming;
+  /**
+   * How fields are found again before filling. Site adapters pass the same scan they
+   * analyze with, so field ids and flags match.
+   */
+  scan?: (root: ParentNode) => ScannedField[];
+}
+
 /**
- * Fills approved fields and returns one result per instruction, in order.
+ * Fills approved fields one at a time and resolves to one result per instruction, in
+ * order.
  *
  * The page is scanned again first and each field is located by its deterministic id in
  * the current DOM, then checked against the metadata recorded at analysis time. So a
  * re-rendered field is still found, while a removed or different field is reported as
  * not found. A failure in one field never stops the others. Never submits anything.
  */
-export function fillFields(
+export async function fillFields(
   root: ParentNode,
   instructions: readonly FillInstruction[],
-): FillResult[] {
-  const current = new Map(scanControls(root).map((scanned) => [scanned.field.id, scanned]));
-  return instructions.map((instruction) => {
+  { customControlTiming = DEFAULT_CUSTOM_CONTROL_TIMING, scan = scanControls }: FillOptions = {},
+): Promise<FillResult[]> {
+  const current = new Map(scan(root).map((scanned) => [scanned.field.id, scanned]));
+  const results: FillResult[] = [];
+  // Sequential: custom dropdowns open popups, which must not overlap.
+  for (const instruction of instructions) {
     let outcome: Outcome;
     try {
-      outcome = fillOne(current.get(instruction.fieldId), instruction);
+      outcome = await fillOne(current.get(instruction.fieldId), instruction, customControlTiming);
     } catch {
       outcome = failed('Something went wrong while filling this field.');
     }
-    return { fieldId: instruction.fieldId, ...outcome };
-  });
+    results.push({ fieldId: instruction.fieldId, ...outcome });
+  }
+  return results;
 }
 
-function fillOne(target: ScannedField | undefined, { value, expected }: FillInstruction): Outcome {
+async function fillOne(
+  target: ScannedField | undefined,
+  { value, expected }: FillInstruction,
+  timing: CustomControlTiming,
+): Promise<Outcome> {
   if (!target || !matchesExpected(target.field, expected)) {
     return { status: 'not-found', message: 'The field is no longer on the page.' };
   }
@@ -44,6 +78,15 @@ function fillOne(target: ScannedField | undefined, { value, expected }: FillInst
   if (!field.visible) return skipped('The field is hidden now.');
   if (field.disabled) return skipped('The field is disabled now.');
   if (field.readOnly) return skipped('The field is read-only.');
+  const [control] = controls;
+  if (!control) return { status: 'not-found', message: 'The field is no longer on the page.' };
+
+  if (field.custom) {
+    if (!field.custom.supported) {
+      return unsupported('This dropdown does not expose enough information to fill it safely.');
+    }
+    return fillCustomSelect(control, value, timing);
+  }
 
   switch (field.type) {
     case 'text':
@@ -51,11 +94,11 @@ function fillOne(target: ScannedField | undefined, { value, expected }: FillInst
     case 'tel':
     case 'number':
     case 'textarea':
-      return fillText(controls[0] as TextControl, field.type, value);
+      return fillText(control as TextControl, field.type, value);
     case 'select':
-      return fillSelect(controls[0] as HTMLSelectElement, value);
+      return fillSelect(control as HTMLSelectElement, value);
     case 'checkbox':
-      return fillCheckbox(controls[0] as HTMLInputElement, value);
+      return fillCheckbox(control as HTMLInputElement, value);
     case 'radio':
       return fillRadio(controls as HTMLInputElement[], field.options ?? [], value);
   }
@@ -77,7 +120,7 @@ function fillText(control: TextControl, type: FormField['type'], value: FillValu
     return failed('The value is not a number.');
   // Never overwrite what the user (or the page) already entered. The existing value is
   // only compared here; it is not read out or reported.
-  if (control.value.trim() !== '') return skipped('The field already has a value.');
+  if (control.value.trim() !== '') return skipped(EXISTING_VALUE);
 
   setValueWithNativeSetter(control, text);
   notifyChange(control);
@@ -85,7 +128,7 @@ function fillText(control: TextControl, type: FormField['type'], value: FillValu
 }
 
 function fillSelect(select: HTMLSelectElement, value: FillValue): Outcome {
-  if (hasSelection(select)) return skipped('The field already has a value.');
+  if (hasSelection(select)) return skipped(EXISTING_VALUE);
   // Never choose options the user cannot choose: disabled, hidden, or empty placeholders.
   const options = Array.from(select.options).filter(
     (option) => !option.disabled && !option.hidden && option.value.trim() !== '',
@@ -106,7 +149,7 @@ function fillCheckbox(checkbox: HTMLInputElement, value: FillValue): Outcome {
   // A checked box is an existing answer: it is never unchecked. An unchecked box that
   // should stay unchecked needs no change.
   if (checkbox.checked) {
-    return checked ? skipped(ALREADY_MATCHES) : skipped('The field already has a value.');
+    return checked ? skipped(ALREADY_MATCHES) : skipped(EXISTING_VALUE);
   }
   if (!checked) return skipped(ALREADY_MATCHES);
   // click() toggles the box and fires click/input/change, which is what frameworks
@@ -132,47 +175,9 @@ function fillRadio(
 
   // An already chosen option is an existing answer: never switch it.
   if (match.radio.checked) return skipped(ALREADY_MATCHES);
-  if (radios.some((radio) => radio.checked)) return skipped('The field already has a value.');
+  if (radios.some((radio) => radio.checked)) return skipped(EXISTING_VALUE);
   match.radio.click();
   return match.radio.checked ? filled() : failed('The page did not accept the selection.');
-}
-
-/**
- * Deterministic option matching, in order of strictness: exact option value, normalized
- * option value, normalized option label, then value or label ignoring spaces and
- * punctuation (so "onsite" matches "On-site" and "fulltime" matches "Full time"). Each
- * stage is whole-text equality, never "contains": "Remote / Hybrid" does not match
- * "remote". The first stage with exactly one match wins; several matches in a stage is
- * ambiguous. No match means nothing is selected.
- */
-export function findMatchingOption<T>(
-  options: readonly T[],
-  describe: (option: T) => { value: string; label: string },
-  value: FillValue,
-): T | 'ambiguous' | undefined {
-  const candidates = candidateTexts(value);
-  const normalized = candidates.map(normalizeText).filter(Boolean);
-  const compacted = candidates.map(compactText).filter(Boolean);
-  const stages: ((option: T) => boolean)[] = [
-    (option) => candidates.includes(describe(option).value),
-    (option) => normalized.includes(normalizeText(describe(option).value)),
-    (option) => normalized.includes(normalizeText(describe(option).label)),
-    (option) =>
-      compacted.includes(compactText(describe(option).value)) ||
-      compacted.includes(compactText(describe(option).label)),
-  ];
-  for (const stage of stages) {
-    const matches = options.filter(stage);
-    if (matches.length === 1) return matches[0];
-    if (matches.length > 1) return 'ambiguous';
-  }
-  return undefined;
-}
-
-function candidateTexts(value: FillValue): string[] {
-  if (value === true) return ['yes', 'true'];
-  if (value === false) return ['no', 'false'];
-  return [String(value)];
 }
 
 export function toBoolean(value: FillValue): boolean | undefined {
@@ -201,8 +206,6 @@ function notifyChange(control: FormControl) {
   control.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-const ALREADY_MATCHES = 'The field already matches your profile.';
-
 /**
  * Whether a select already has a chosen value. An empty-valued option (a placeholder) is no
  * value. A non-empty option counts when it is not the first option, or when the page marked
@@ -216,8 +219,3 @@ function hasSelection(select: HTMLSelectElement): boolean {
       (index > 0 || option.hasAttribute('selected')),
   );
 }
-
-const filled = (): Outcome => ({ status: 'filled', message: 'Filled.' });
-const skipped = (message: string): Outcome => ({ status: 'skipped', message });
-const failed = (message: string): Outcome => ({ status: 'failed', message });
-const unsupported = (message: string): Outcome => ({ status: 'unsupported', message });

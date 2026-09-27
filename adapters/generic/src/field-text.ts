@@ -3,7 +3,11 @@ const MAX_TEXT_LENGTH = 200;
 /** How many ancestor levels to search for preceding text. Kept small on purpose. */
 const MAX_ANCESTOR_STEPS = 3;
 
-export const CONTROL_SELECTOR = 'input, select, textarea';
+/** Custom single-select controls: ARIA comboboxes and listbox popup triggers. */
+export const CUSTOM_CONTROL_SELECTOR = '[role="combobox"], [aria-haspopup="listbox"]';
+
+/** Everything the scanner considers, native and custom. */
+export const CONTROL_SELECTOR = `input, select, textarea, ${CUSTOM_CONTROL_SELECTOR}`;
 
 export function cleanText(text: string | null | undefined): string | undefined {
   const cleaned = text?.replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT_LENGTH);
@@ -18,7 +22,9 @@ export function cleanText(text: string | null | undefined): string | undefined {
 export function textOf(element: Element): string | undefined {
   const clone = element.cloneNode(true) as Element;
   clone
-    .querySelectorAll(`${CONTROL_SELECTOR}, button, script, style, [aria-hidden="true"]`)
+    .querySelectorAll(
+      `${CONTROL_SELECTOR}, [role="listbox"], button, script, style, [aria-hidden="true"]`,
+    )
     .forEach((node) => {
       node.remove();
     });
@@ -51,8 +57,7 @@ export function labelText(
 const MAX_WRAPPER_DEPTH = 3;
 
 /** Controls that count as "another field" inside a wrapper (hidden inputs do not). */
-const FIELD_CONTROL_SELECTOR =
-  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea';
+const FIELD_CONTROL_SELECTOR = `input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([aria-hidden="true"]), select, textarea, ${CUSTOM_CONTROL_SELECTOR}`;
 
 /**
  * A `<label>` without `for` that sits next to the control in a field wrapper, as in
@@ -67,7 +72,11 @@ export function wrapperLabelText(control: Element): string | undefined {
   let node = control.parentElement;
   for (let depth = 0; node && depth < MAX_WRAPPER_DEPTH; depth += 1) {
     if (node.matches('form, fieldset, body')) return undefined;
-    if (node.querySelectorAll(FIELD_CONTROL_SELECTOR).length > 1) return undefined;
+    const fields = Array.from(node.querySelectorAll(FIELD_CONTROL_SELECTOR)).filter(
+      // Parts of a custom dropdown (e.g. its search input) belong to that one field.
+      (element) => !element.parentElement?.closest(CUSTOM_CONTROL_SELECTOR),
+    );
+    if (fields.length > 1) return undefined;
     const labels = Array.from(node.querySelectorAll('label')).filter(
       (label) => !label.hasAttribute('for') && label.querySelector(CONTROL_SELECTOR) === null,
     );
@@ -79,8 +88,17 @@ export function wrapperLabelText(control: Element): string | undefined {
   return undefined;
 }
 
+/**
+ * Text of the elements referenced by aria-labelledby, in order. A reference to the element
+ * itself is skipped: custom dropdowns often label themselves as "<question> <current
+ * value>", and the current value is not part of the question.
+ */
 export function ariaLabelledByText(element: Element): string | undefined {
-  const ids = element.getAttribute('aria-labelledby')?.split(/\s+/).filter(Boolean) ?? [];
+  const ids =
+    element
+      .getAttribute('aria-labelledby')
+      ?.split(/\s+/)
+      .filter((id) => id && id !== element.id) ?? [];
   const texts = ids
     .map((id) => element.ownerDocument.getElementById(id))
     .filter((node) => node !== null)

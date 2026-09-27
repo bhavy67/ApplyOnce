@@ -17,7 +17,11 @@ export type UnsupportedReason =
   | 'disabled'
   | 'readonly'
   /** A checkbox in a multi-option group (see FormField.groupSize). */
-  | 'checkbox-group';
+  | 'checkbox-group'
+  /** A custom dropdown without the ARIA relationships needed to operate it safely. */
+  | 'unsupported-control'
+  /** The same question appears several times (repeated record sections). */
+  | 'repeated-question';
 
 /** Where a mapping came from: the deterministic matcher, or a mapping the user taught. */
 export type MappingSource = 'automatic' | 'taught';

@@ -377,3 +377,24 @@ describe('Phase 6: groups and state', () => {
     expect(scan('<div contenteditable="true" aria-label="Cover letter"></div>')).toEqual([]);
   });
 });
+
+describe('Phase 8: scan options for site adapters', () => {
+  it('excludes controls, prefers a stable identity, and post-processes the result', () => {
+    document.body.innerHTML = `
+      <nav><input name="search" aria-label="Search"></nav>
+      <label for="gen-1">First name</label><input id="gen-1" data-key="first">
+      <label for="gen-2">Last name</label><input id="gen-2">`;
+    const fields = scanFields(document, {
+      exclude: (element) => element.closest('nav') !== null,
+      stableIdentity: (element) => element.getAttribute('data-key') ?? undefined,
+      postProcess: (scanned) => scanned.filter(({ field }) => field.signals.label !== 'Last name'),
+    });
+    expect(fields.map((f) => f.id)).toEqual(['key:first']);
+  });
+
+  it('keeps the generic behavior without options', () => {
+    document.body.innerHTML =
+      '<label for="gen-1">First name</label><input id="gen-1" data-key="first">';
+    expect(scanFields(document).map((f) => f.id)).toEqual(['id:gen-1']);
+  });
+});

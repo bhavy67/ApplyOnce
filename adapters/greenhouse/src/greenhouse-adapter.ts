@@ -15,7 +15,7 @@ export const greenhouseAdapter: FormAdapter<ParentNode> = {
     return [];
   },
 
-  fillFields: (_context, instructions) =>
+  fillFields: async (_context, instructions) =>
     // TODO(phase-5): Greenhouse-specific filling (custom widgets, step awareness).
     instructions.map(({ fieldId }) => ({
       fieldId,

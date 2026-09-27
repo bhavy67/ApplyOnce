@@ -19,14 +19,27 @@ type Listener = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
 
 const SITE_ADAPTERS = [workdayAdapter, greenhouseAdapter];
 
-// TODO(phase-4/5): use the site adapter once Workday/Greenhouse extraction and filling
-// exist. Until then the generic adapter scans and fills on every page.
+/** Site adapters that scan and fill; others (the Greenhouse stub) only report the platform. */
+const WORKING_ADAPTERS: ReadonlySet<string> = new Set([workdayAdapter.id]);
+
 const pageContext = () => ({ url: window.location.href, root: document });
+
+/**
+ * The platform (for display) and the adapter that scans and fills. A detected site
+ * adapter is used only once it is implemented; the generic adapter is always the fallback.
+ */
+function resolveAdapter(context: ReturnType<typeof pageContext>) {
+  const detected = selectAdapter(SITE_ADAPTERS, genericAdapter, context);
+  return {
+    platform: detected.id,
+    adapter: WORKING_ADAPTERS.has(detected.id) ? detected : genericAdapter,
+  };
+}
 
 async function scanPage(): Promise<PageScan> {
   const context = pageContext();
-  const platform = selectAdapter(SITE_ADAPTERS, genericAdapter, context).id;
-  const fields = genericAdapter.getFields(context);
+  const { platform, adapter } = resolveAdapter(context);
+  const fields = adapter.getFields(context);
   const status = await sendToServiceWorker(MessageType.GetProfileStatus);
   return {
     title: document.title,
@@ -57,10 +70,16 @@ const listener: Listener = (rawMessage: unknown, _sender, sendResponse) => {
       );
       return true; // Async response.
     case MessageType.FillFields:
-      sendResponse(
-        ok({ results: genericAdapter.fillFields(pageContext(), message.payload.instructions) }),
-      );
-      return false;
+      resolveAdapter(pageContext())
+        .adapter.fillFields(pageContext(), message.payload.instructions)
+        .then(
+          (results) => sendResponse(ok({ results })),
+          (error: unknown) => {
+            logFailure('page fill', error);
+            sendResponse(fail('internal-error'));
+          },
+        );
+      return true; // Async response: custom dropdowns are filled step by step.
     default:
       sendResponse(fail('unknown-message'));
       return false;

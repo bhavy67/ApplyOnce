@@ -1,28 +1,22 @@
 import type { FormAdapter } from '@applyonce/core';
+import { fillFields } from '@applyonce/adapter-generic';
+import { detectWorkday } from './detect';
+import { scanWorkday, scanWorkdayFields } from './scan';
 
-const WORKDAY_HOST_SUFFIXES = ['.myworkdayjobs.com', '.myworkdaysite.com'];
-
-/** Dedicated Workday integration (spec §17). */
+/**
+ * Workday integration (spec §17). Only detection and field identification are
+ * Workday-specific; mapping, approval, and filling (native inputs, selects, and custom
+ * dropdowns) are the generic engine, run on the same Workday scan used for analysis.
+ *
+ * It works on the current step only: it never navigates, never clicks Next, Save and
+ * Continue, or Submit, never uploads files, and never signs in.
+ */
 export const workdayAdapter: FormAdapter<ParentNode> = {
   id: 'workday',
 
-  detect: ({ url }) => {
-    const { hostname } = new URL(url);
-    // TODO(phase-4): confirm against real application URLs, including custom domains.
-    return WORKDAY_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
-  },
+  detect: (context) => detectWorkday(context).platform === 'workday',
 
-  getFields: () => {
-    // TODO(phase-4): step detection and field extraction. Never assume every Workday
-    // page is identical; handle conditional sections and custom widgets.
-    return [];
-  },
+  getFields: ({ root }) => scanWorkdayFields(root),
 
-  fillFields: (_context, instructions) =>
-    // TODO(phase-4): Workday-specific filling (custom widgets, step awareness).
-    instructions.map(({ fieldId }) => ({
-      fieldId,
-      status: 'unsupported',
-      message: 'Workday filling is not available yet.',
-    })),
+  fillFields: ({ root }, instructions) => fillFields(root, instructions, { scan: scanWorkday }),
 };

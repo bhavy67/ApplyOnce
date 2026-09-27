@@ -483,3 +483,42 @@ describe('Phase 6: unsupported states and backward-compatible keys', () => {
     ]);
   });
 });
+
+describe('Phase 7: custom dropdowns', () => {
+  const combobox = (supported = true) => ({
+    ...field('select', { label: 'Work Mode', htmlId: 'mode' }),
+    htmlType: 'combobox',
+    custom: { pattern: 'combobox' as const, supported },
+  });
+
+  it('maps a combobox exactly like a native select with the same question', () => {
+    const native = field('select', { label: 'Work Mode', htmlId: 'mode' });
+    const [a, b] = mapFields([native, combobox()], matcher).mappings;
+    expect({ ...b, fieldId: a?.fieldId }).toEqual(a);
+    expect(b).toMatchObject({ status: 'mapped', profileField: 'work_mode' });
+  });
+
+  it('marks a custom control without an ARIA relationship unsupported', () => {
+    expect(mapOne(combobox(false))).toMatchObject({
+      status: 'unsupported',
+      unsupportedReason: 'unsupported-control',
+      profileField: 'work_mode',
+    });
+  });
+});
+
+describe('Phase 8: repeated questions', () => {
+  it('never fills a question that repeats on the page', () => {
+    const repeated = { ...field('text', { label: 'Job Title' }), repeatedCount: 2 };
+    expect(mapOne(repeated)).toMatchObject({
+      status: 'unsupported',
+      unsupportedReason: 'repeated-question',
+      profileField: 'current_title',
+    });
+  });
+
+  it('keeps a field without a generated id teachable through its question', () => {
+    const workday = field('text', { label: 'Preferred Office Location', name: undefined });
+    expect(mapOne(workday)?.mappingKey).toBe('v1|text|q=preferred office location|c=|i=');
+  });
+});

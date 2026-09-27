@@ -113,6 +113,8 @@ function findUnsupportedReason(
 ): UnsupportedReason | undefined {
   if (!PROFILE_FIELDS[profileField].fieldTypes.includes(field.type)) return 'incompatible-type';
   if (field.type === 'checkbox' && (field.groupSize ?? 1) > 1) return 'checkbox-group';
+  if (field.custom && !field.custom.supported) return 'unsupported-control';
+  if ((field.repeatedCount ?? 1) > 1) return 'repeated-question';
   if (!field.visible) return 'hidden';
   if (field.disabled) return 'disabled';
   if (field.readOnly) return 'readonly';

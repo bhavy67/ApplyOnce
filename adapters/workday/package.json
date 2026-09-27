@@ -10,9 +10,12 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@applyonce/core": "workspace:*"
+    "@applyonce/adapter-generic": "workspace:*",
+    "@applyonce/core": "workspace:*",
+    "@applyonce/field-mapper": "workspace:*"
   },
   "devDependencies": {
+    "happy-dom": "catalog:",
     "typescript": "catalog:"
   }
 }

@@ -27,14 +27,14 @@ export interface FormAdapter<TRoot = unknown> {
   getFields(context: AdapterContext<TRoot>): FormField[];
 
   /**
-   * Fills approved fields on the current page and returns one result per instruction, in
-   * order. Must re-locate each field (the page may have re-rendered since analysis), never
-   * throw for a single field, and never submit the form.
+   * Fills approved fields on the current page, one at a time, and resolves to one result
+   * per instruction, in order. Must re-locate each field (the page may have re-rendered
+   * since analysis), never reject because of a single field, and never submit the form.
    */
   fillFields(
     context: AdapterContext<TRoot>,
     instructions: readonly FillInstruction[],
-  ): FillResult[];
+  ): Promise<FillResult[]>;
 }
 
 export function selectAdapter<TRoot>(

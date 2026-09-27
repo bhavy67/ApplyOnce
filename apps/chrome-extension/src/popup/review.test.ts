@@ -194,3 +194,33 @@ describe('Phase 6 unsupported notes', () => {
     expect(canTeach(m)).toBe(false);
   });
 });
+
+describe('Phase 7 unsupported custom control', () => {
+  it('explains it and never allows selecting or teaching it', () => {
+    const m = mapping({
+      fieldId: 'x',
+      status: 'unsupported',
+      unsupportedReason: 'unsupported-control',
+    });
+    expect(mappingNote(m, false)).toBe(
+      'Custom dropdown ApplyOnce cannot operate safely. Will not be filled.',
+    );
+    expect(isSelectable(m)).toBe(false);
+    expect(canTeach(m)).toBe(false);
+  });
+});
+
+describe('Phase 8 repeated questions', () => {
+  it('explains a repeated question and never allows selecting or teaching it', () => {
+    const m = mapping({
+      fieldId: 'x',
+      status: 'unsupported',
+      unsupportedReason: 'repeated-question',
+    });
+    expect(mappingNote(m, false)).toBe(
+      'This question repeats on the page (e.g. several records). Will not be filled.',
+    );
+    expect(isSelectable(m)).toBe(false);
+    expect(canTeach(m)).toBe(false);
+  });
+});

@@ -24,6 +24,12 @@ type PopupState =
   | { status: 'failed'; message: string }
   | { status: 'ready'; analysis: Analysis };
 
+const PLATFORM_NOTES: Readonly<Record<string, string>> = {
+  workday:
+    'Workday page: ApplyOnce fills the current step only. Move to the next step yourself, then analyze again.',
+  greenhouse: 'Greenhouse page detected. Site-specific support comes later.',
+};
+
 const PLATFORM_NAMES: Readonly<Record<string, string>> = {
   workday: 'Workday',
   greenhouse: 'Greenhouse',
@@ -181,9 +187,7 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
         </p>
       )}
 
-      {platform && (
-        <p className="note">{platform} page detected. Site-specific support comes later.</p>
-      )}
+      {platform && <p className="note">{PLATFORM_NOTES[scan.platform]}</p>}
       <p className="profile-status">{describeProfile(scan.profileStatus)}</p>
 
       <button
