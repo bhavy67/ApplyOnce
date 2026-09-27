@@ -3,7 +3,7 @@ import type { FillInstruction, FillValue } from '@applyonce/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { findListbox } from './custom-select';
 import { fillFields } from './fill-fields';
-import { scanFields } from './scan-fields';
+import { scanControls, scanFields, type ScannedField } from './scan-fields';
 
 const TIMING = { customControlTiming: { timeoutMs: 300, intervalMs: 10 } };
 
@@ -626,5 +626,61 @@ describe('Phase 8: navigation and submission safety', () => {
     document.querySelector('[role=option]')?.addEventListener('click', () => (clicks += 1));
     expect(await fillOne('id:x', 'next')).toMatchObject({ status: 'failed' });
     expect(clicks).toBe(0);
+  });
+});
+
+describe('Phase 9: site-specific custom fillers', () => {
+  /** A scan that marks the combobox input as a search field, like the Workday scan does. */
+  const searchScan = (root: ParentNode): ScannedField[] =>
+    scanControls(root).map((entry) =>
+      entry.field.custom
+        ? {
+            ...entry,
+            field: { ...entry.field, custom: { pattern: 'search-input', supported: true } },
+          }
+        : entry,
+    );
+
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <label for="s">University</label>
+      <input id="s" role="combobox" aria-autocomplete="list" aria-controls="lb" aria-expanded="false">`;
+  });
+
+  it('leaves a search field untouched when no site filler handles it', async () => {
+    const instruction: FillInstruction = {
+      fieldId: 'id:s',
+      value: 'University of Example',
+      expected: { type: 'select', htmlId: 's', label: 'University' },
+    };
+    const [result] = await fillFields(document, [instruction], { ...TIMING, scan: searchScan });
+    expect(result).toMatchObject({ status: 'unsupported' });
+    expect((document.getElementById('s') as HTMLInputElement).value).toBe('');
+  });
+
+  it('hands custom controls to the site filler, and falls back when it declines', async () => {
+    const seen: string[] = [];
+    const instruction: FillInstruction = {
+      fieldId: 'id:s',
+      value: 'University of Example',
+      expected: { type: 'select', htmlId: 's', label: 'University' },
+    };
+    const [result] = await fillFields(document, [instruction], {
+      ...TIMING,
+      scan: searchScan,
+      fillCustom: ({ field, control }, value) => {
+        seen.push(`${field.custom?.pattern}:${control.id}:${String(value)}`);
+        return Promise.resolve({ status: 'filled', message: 'Filled.' });
+      },
+    });
+    expect(seen).toEqual(['search-input:s:University of Example']);
+    expect(result).toMatchObject({ status: 'filled' });
+
+    const [declined] = await fillFields(document, [instruction], {
+      ...TIMING,
+      scan: searchScan,
+      fillCustom: () => undefined,
+    });
+    expect(declined).toMatchObject({ status: 'unsupported' });
   });
 });

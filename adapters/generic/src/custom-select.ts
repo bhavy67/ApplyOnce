@@ -17,7 +17,7 @@ export const DEFAULT_CUSTOM_CONTROL_TIMING: CustomControlTiming = {
   intervalMs: 25,
 };
 
-interface CustomOption {
+export interface CustomOption {
   element: HTMLElement;
   /** Accessible label: aria-label, aria-labelledby, else visible text (aria-hidden excluded). */
   label: string;
@@ -147,7 +147,8 @@ export function findListbox(control: HTMLElement): HTMLElement | 'ambiguous' | u
   return visible[0];
 }
 
-function readOptions(listbox: HTMLElement): CustomOption[] {
+/** Enabled, visible role="option" elements with their accessible label and value metadata. */
+export function readOptions(listbox: HTMLElement): CustomOption[] {
   return Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]'))
     .filter((element) => element.getAttribute('aria-disabled') !== 'true' && isVisible(element))
     .map((element) => ({
@@ -210,7 +211,7 @@ async function confirmByReopening(
   return confirmed;
 }
 
-function sameText(a: string, b: string): boolean {
+export function sameText(a: string, b: string): boolean {
   const left = normalizeText(a);
   return left !== '' && left === normalizeText(b);
 }
@@ -225,7 +226,7 @@ function closeWith(control: HTMLElement, outcome: Outcome): Outcome {
 }
 
 /** Escape is the standard way to close a listbox popup without choosing anything. */
-function closePopup(control: HTMLElement) {
+export function closePopup(control: HTMLElement) {
   control.dispatchEvent(
     new KeyboardEvent('keydown', {
       key: 'Escape',
@@ -236,7 +237,7 @@ function closePopup(control: HTMLElement) {
   );
 }
 
-function arrowDown(control: HTMLElement) {
+export function arrowDown(control: HTMLElement) {
   control.dispatchEvent(
     new KeyboardEvent('keydown', {
       key: 'ArrowDown',
@@ -300,7 +301,7 @@ export function isNavigationAction(element: HTMLElement): boolean {
 }
 
 /** Whether clicking the element would submit a form. */
-function isSubmitter(element: HTMLElement): boolean {
+export function isSubmitter(element: HTMLElement): boolean {
   if (element.tagName === 'BUTTON') {
     const button = element as HTMLButtonElement;
     return button.type === 'submit' && button.form !== null;
@@ -312,7 +313,8 @@ function isSubmitter(element: HTMLElement): boolean {
   return false;
 }
 
-function clickSequence(element: HTMLElement) {
+/** A full primary-button click, as a pointer device produces it. */
+export function clickSequence(element: HTMLElement) {
   press(element);
   release(element);
 }
@@ -327,7 +329,7 @@ function dispatchPointer(element: HTMLElement, type: string) {
 }
 
 /** Polls `probe` until it returns something truthy, or the timeout passes. */
-async function waitUntil<T>(
+export async function waitUntil<T>(
   probe: () => T | undefined,
   { timeoutMs, intervalMs }: CustomControlTiming,
 ): Promise<T | undefined> {

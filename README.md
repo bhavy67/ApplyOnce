@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 8 — Workday adapter: complete.**
+**Phase 9 — Workday autocomplete / search fields: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -31,6 +31,9 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 8: Workday pages are detected and scanned with Workday-specific rules (scope,
   stable field identity, hidden helpers, search inputs, repeated records), then mapped,
   reviewed, and filled by the same generic engine. See [Workday](#workday).
+- Phase 9: Workday search-as-you-type fields (e.g. "School or University") are filled by
+  typing the approved value once and choosing the one suggestion that matches it exactly,
+  confirmed before success. See [Search fields](#search-fields-workday-autocomplete).
 
 Nothing is ever submitted. Greenhouse gets dedicated support in a later phase; until then
 it is handled by the generic adapter.
@@ -474,17 +477,17 @@ Tenants on their own domains are recognised by the page containers.
   re-renders with new ids is still filled; generated ids are dropped from the field;
 - one logical field per Workday field: a hidden text input next to a visible control in the
   same automation container is a helper, not a field;
-- **search-and-select inputs** (`aria-autocomplete="list"`/`"both"`, e.g. "School or
-  University") are **not supported**: they need typing and choosing a suggestion, which
-  could not be verified on a real Workday form, so they are reported as unsupported and
-  nothing is typed into them;
+- **search fields** (`aria-autocomplete="list"`/`"both"`, e.g. "School or University")
+  are one logical field of type _text_ and are filled as described in
+  [Search fields](#search-fields-workday-autocomplete);
 - a question that appears more than once on the step (e.g. "Job Title" in two
   work-experience blocks) is marked repeated and never filled: the profile holds only the
   current job and one education record. A single section's fields fill normally.
 
 **Supported controls:** text-like inputs, native selects, radio groups, single checkboxes,
-and Workday dropdowns that expose ARIA listbox relationships (through the generic custom
-dropdown engine). A dropdown without such relationships is reported as unsupported.
+Workday dropdowns that expose ARIA listbox relationships (through the generic custom
+dropdown engine), and search fields (below). A dropdown or search field without such
+relationships is reported as unsupported.
 Demographic, self-identification, and consent checkboxes only match if they are canonical
 profile fields, which they are not.
 
@@ -495,6 +498,54 @@ account creation, password, or one-time-code handling.
 
 Workday is configurable per tenant: sections, questions, and widgets differ between
 companies and application templates, so not every Workday form is supported.
+
+### Search fields (Workday autocomplete)
+
+Workday asks for things like the school, field of study, or location through a text input
+that searches as you type and offers suggestions. ApplyOnce fills one only after you
+approved it, in these steps (`adapters/workday/src/search-input.ts`):
+
+1. **Detection.** A text input (or input combobox) with `aria-autocomplete="list"` or
+   `"both"` is a search field. It is fillable only if it also declares a popup relationship
+   (`aria-controls`, `aria-owns`, or `aria-expanded`); otherwise it is unsupported. Ordinary
+   text inputs are never treated as search fields. The question comes from the label, never
+   from the input's value or the suggestions. Identity is the field's `data-automation-id`,
+   so a re-rendered step is still found; nothing from the page is stored.
+2. **Existing value.** A field that already has text, a Workday selected-item pill, or a
+   selected suggestion is skipped. ApplyOnce never clears a field to search.
+3. **Typing.** The approved value is entered once (native value setter and one `input`
+   event), with no exploratory or per-character typing. If no suggestions appear, one
+   ArrowDown (the standard combobox key) is sent. A widget that ignores script-generated
+   input fails safely; there is no workaround.
+4. **Suggestions.** The list is found only through `aria-controls`, `aria-owns`, or
+   `aria-activedescendant` (never by position or class names). Several lists fail. The
+   options must stay unchanged briefly (and the list must not be `aria-busy`), so
+   "Searching…" placeholders or late results are not read as the answer. The wait is
+   bounded (4 s by default, configurable).
+5. **Matching.** The same rules as dropdowns: option value/id, then text ignoring case,
+   spacing, and punctuation (accessible text preferred, `aria-hidden` content ignored).
+   Exactly one suggestion must match, and no other suggestion may extend the value:
+   "University of Example" with suggestions "University of Example" and "University of
+   Example, Ahmedabad" is ambiguous and fails, and "Example University" is no match. No
+   substring, prefix, fuzzy, or AI matching.
+6. **Selection and confirmation.** The suggestion is clicked normally (never by setting
+   `aria-selected`); a suggestion that is a submit or navigation button is never clicked.
+   Success requires the widget to show the choice: the suggestion marked selected, a
+   selected-item pill with its text, or the popup closed with the field showing it.
+   Otherwise: "Unable to confirm autocomplete selection."
+7. **Failure cleanup.** On any failure the popup is closed and the typed text is removed,
+   but only if the field still holds exactly what ApplyOnce typed; the result says whether
+   it was removed. Other fields keep filling.
+
+Supported profile fields are those with a plain text value: Institution, Field of study,
+City, State / province, Country, and Current company (plus any field you Teach). Yes/no
+values are never searched for.
+
+**Verification.** Verified in Chrome on local Workday-style fixtures (plain DOM, React, Vue,
+and Angular, with delayed, portal, re-rendered, ambiguous, and no-result cases). A real
+Workday application form requires sign-in, which ApplyOnce and its tests never automate, so
+search fields have **not** been verified on a real Workday form; only a read-only Analyze of
+a public Workday job board was run.
 
 ## How the packages are built
 
@@ -531,9 +582,9 @@ single classic script, because MV3 content scripts cannot be ES modules.
 
 - Greenhouse extraction and filling (the adapter only recognises its URLs; the generic
   adapter handles those pages)
-- Workday search-and-select (typed suggestion) inputs, multi-page navigation, repeated
-  record sections, and verification against a real Workday application form (it requires
-  sign-in)
+- Workday multi-page navigation, repeated record sections, multi-select search fields
+  (several pills), replacing an existing search selection, and verification against a real
+  Workday application form (it requires sign-in)
 - Repeatable sections: multiple degrees, schools, employers, work history entries, or
   certifications (education and employment are single primary records)
 - Editing `legacy` values carried over by migration (they are read-only)
@@ -542,7 +593,7 @@ single classic script, because MV3 content scripts cannot be ES modules.
 - Continuous DOM observation (MutationObserver), iframes, shadow DOM, date pickers, file
   uploads
 - Custom dropdowns without ARIA relationships, multi-select listboxes, comboboxes that
-  only work by typing a search, tree/grid/menu popups, and replacing an existing selection
+  only work by typing a search outside Workday, tree/grid/menu popups, and replacing an existing selection
 - `contenteditable` / rich-text fields (see Generic form compatibility)
 - Multi-option checkbox groups (the profile has no multi-value fields)
 - Profile completeness checks

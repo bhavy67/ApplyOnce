@@ -43,3 +43,23 @@ export const CHROME_CONTAINERS = [
 export const MIN_DISTINCT_AUTOMATION_IDS = 10;
 
 export const byAutomationId = (value: string) => `[${AUTOMATION_ID}="${value}"]`;
+
+/**
+ * Search-as-you-type fields (Phase 9). A text input whose aria-autocomplete is one of these
+ * values types a query and offers suggestions to choose from.
+ */
+export const SEARCH_AUTOCOMPLETE_VALUES = ['list', 'both'];
+
+/**
+ * A search field is fillable only if it also declares a popup relationship with one of
+ * these attributes; the suggestion list itself is then found through aria-controls,
+ * aria-owns, or aria-activedescendant (never by position).
+ */
+export const SEARCH_RELATIONSHIP_ATTRIBUTES = ['aria-controls', 'aria-owns', 'aria-expanded'];
+
+/**
+ * Workday shows a chosen suggestion as a "selected item" pill next to the search input
+ * (the input itself is cleared). A pill with the suggestion's text inside the field's
+ * container confirms the selection.
+ */
+export const SELECTED_ITEM = byAutomationId('selectedItem');

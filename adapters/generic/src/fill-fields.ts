@@ -35,7 +35,18 @@ export interface FillOptions {
    * analyze with, so field ids and flags match.
    */
   scan?: (root: ParentNode) => ScannedField[];
+  /**
+   * A site adapter's filler for custom controls the generic engine does not operate (e.g.
+   * search-as-you-type inputs). Return undefined to let the generic engine handle it.
+   */
+  fillCustom?: CustomFiller;
 }
+
+export type CustomFiller = (
+  target: { field: FormField; control: HTMLElement },
+  value: FillValue,
+  timing: CustomControlTiming,
+) => Promise<Outcome> | undefined;
 
 /**
  * Fills approved fields one at a time and resolves to one result per instruction, in
@@ -49,7 +60,11 @@ export interface FillOptions {
 export async function fillFields(
   root: ParentNode,
   instructions: readonly FillInstruction[],
-  { customControlTiming = DEFAULT_CUSTOM_CONTROL_TIMING, scan = scanControls }: FillOptions = {},
+  {
+    customControlTiming = DEFAULT_CUSTOM_CONTROL_TIMING,
+    scan = scanControls,
+    fillCustom,
+  }: FillOptions = {},
 ): Promise<FillResult[]> {
   const current = new Map(scan(root).map((scanned) => [scanned.field.id, scanned]));
   const results: FillResult[] = [];
@@ -57,7 +72,12 @@ export async function fillFields(
   for (const instruction of instructions) {
     let outcome: Outcome;
     try {
-      outcome = await fillOne(current.get(instruction.fieldId), instruction, customControlTiming);
+      outcome = await fillOne(
+        current.get(instruction.fieldId),
+        instruction,
+        customControlTiming,
+        fillCustom,
+      );
     } catch {
       outcome = failed('Something went wrong while filling this field.');
     }
@@ -70,6 +90,7 @@ async function fillOne(
   target: ScannedField | undefined,
   { value, expected }: FillInstruction,
   timing: CustomControlTiming,
+  fillCustom: CustomFiller | undefined,
 ): Promise<Outcome> {
   if (!target || !matchesExpected(target.field, expected)) {
     return { status: 'not-found', message: 'The field is no longer on the page.' };
@@ -84,6 +105,12 @@ async function fillOne(
   if (field.custom) {
     if (!field.custom.supported) {
       return unsupported('This dropdown does not expose enough information to fill it safely.');
+    }
+    const handled = fillCustom?.({ field, control }, value, timing);
+    if (handled) return handled;
+    // Search-as-you-type inputs need a site-specific filler; the generic engine never types.
+    if (field.custom.pattern === 'search-input') {
+      return unsupported('Search fields are not supported on this page.');
     }
     return fillCustomSelect(control, value, timing);
   }
@@ -194,7 +221,7 @@ export function toBoolean(value: FillValue): boolean | undefined {
  * property. Writing through the prototype's native setter bypasses that tracker, so the
  * framework notices the difference when the input event fires and updates its state.
  */
-function setValueWithNativeSetter(control: TextControl, value: string) {
+export function setValueWithNativeSetter(control: TextControl, value: string) {
   const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), 'value')?.set;
   if (setter) setter.call(control, value);
   else control.value = value;

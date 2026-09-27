@@ -161,9 +161,28 @@ Workday); the Greenhouse stub's pages use the generic adapter. The generic scann
 analyzed with. The Workday adapter (`adapters/workday`) is detection (`detect.ts`), one
 selectors file (`selectors.ts`), and a scan (`scan.ts`); see the README. Two platform-
 neutral additions support it: `FormField.repeatedCount` (mapped to `repeated-question`,
-never filled) and the `search-input` custom pattern (always unsupported). Independently,
+never filled) and the `search-input` custom pattern (unsupported by the generic engine;
+filled only by a site adapter's filler, see Phase 9). Independently,
 the custom-dropdown engine never clicks a trigger or option whose whole name is a
 navigation or submission action (Next, Continue, Save and Continue, Submit, Apply, Back, …).
+
+**Search fields (Phase 9).** `fillFields` accepts a `fillCustom` hook: a site adapter's
+filler for custom controls, tried before the generic engine (returning `undefined` hands
+the field back). Without one, `search-input` stays unsupported, so generic pages are
+unchanged. The Workday adapter's `fillWorkday` passes `fillSearchInput`
+(`adapters/workday/src/search-input.ts`), which reuses the Phase 7 helpers exported from
+`custom-select.ts` (`findListbox`, `readOptions`, `clickSequence`, `closePopup`,
+`waitUntil`, `isSubmitter`, `isNavigationAction`) and the shared option matcher
+(`findMatchingOption`), plus an "extends" guard that makes a suggestion containing the
+value as whole words (e.g. "…, Ahmedabad") ambiguous. The scan marks an input with
+`aria-autocomplete` list/both as `{ type: 'text', htmlType: 'search', custom: { pattern:
+'search-input', supported } }`, supported when it declares aria-controls, aria-owns, or
+aria-expanded; mapping and Teach Once treat it as a text field. Timing
+(`DEFAULT_SEARCH_TIMING`, 4 s / 50 ms) is separate from dropdown timing. Confirmation
+accepts `aria-selected`, a selected option in the list, a Workday selected-item pill
+(`SELECTED_ITEM` in `selectors.ts`) inside the field's container, or the popup closed with
+the field showing the suggestion; never just the typed text. Cleanup removes the typed text
+only if the field still holds exactly it. No DOM reference outlives one fill call.
 
 Phase 6 additions: a **wrapper label** rule (the only `for`-less `<label>` in the smallest
 wrapper, at most three levels up, that contains only this field), `aria-hidden` text

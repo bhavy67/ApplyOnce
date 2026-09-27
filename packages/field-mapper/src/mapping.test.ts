@@ -278,6 +278,7 @@ describe('Phase 5: job application fields', () => {
     ['text', 'Major', 'field_of_study'],
     ['text', 'University', 'institution'],
     ['text', 'College', 'institution'],
+    ['text', 'School or University', 'institution'],
     ['number', 'Graduation Year', 'graduation_year'],
     ['text', 'LinkedIn', 'linkedin_url'],
     ['text', 'GitHub', 'github_url'],

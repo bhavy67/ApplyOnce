@@ -122,6 +122,9 @@ export const DEFAULT_ALIASES: Readonly<Partial<Record<ProfileFieldKey, readonly 
     'educational institution',
     'college university',
     'university college',
+    'school or university',
+    'college or university',
+    'university or college',
   ],
   graduation_year: [
     'graduation year',

@@ -1,7 +1,14 @@
 import type { FormField } from '@applyonce/core';
 import { scanControls, type ScannedField, type ScanOptions } from '@applyonce/adapter-generic';
 import { createMappingKey } from '@applyonce/field-mapper';
-import { APPLICATION_SCOPE, AUTOMATION_ID, byAutomationId, CHROME_CONTAINERS } from './selectors';
+import {
+  APPLICATION_SCOPE,
+  AUTOMATION_ID,
+  byAutomationId,
+  CHROME_CONTAINERS,
+  SEARCH_AUTOCOMPLETE_VALUES,
+  SEARCH_RELATIONSHIP_ATTRIBUTES,
+} from './selectors';
 
 const TEXT_LIKE = new Set(['text', 'email', 'tel', 'number', 'textarea']);
 
@@ -15,8 +22,9 @@ const TEXT_LIKE = new Set(['text', 'email', 'tel', 'number', 'textarea']);
  *    from the field's signals, so it is neither matched on nor checked when filling.
  * 3. One logical field per Workday field container: a hidden text input next to a visible
  *    control in the same automation container is a helper, not a field.
- * 4. Search-and-select inputs (aria-autocomplete) need typing and a suggestion pick;
- *    ApplyOnce does not type into them, so they are reported as unsupported.
+ * 4. Search-as-you-type inputs (aria-autocomplete list/both) are one text field with the
+ *    "search-input" pattern, filled by search-input.ts; they are supported only when they
+ *    declare a popup relationship, otherwise reported as unsupported.
  * 5. A question asked several times on the step (repeated record sections such as work
  *    experience) is marked repeated, and is therefore never filled.
  */
@@ -49,14 +57,18 @@ function dropGeneratedId(entry: ScannedField): ScannedField {
 
 function markSearchInput(entry: ScannedField): ScannedField {
   const [control] = entry.controls;
-  const autocomplete = control?.getAttribute('aria-autocomplete');
-  if (
-    !entry.field.custom &&
-    TEXT_LIKE.has(entry.field.type) &&
-    (autocomplete === 'list' || autocomplete === 'both')
-  ) {
-    entry.field.custom = { pattern: 'search-input', supported: false };
-  }
+  if (control?.tagName !== 'INPUT') return entry;
+  const autocomplete = control.getAttribute('aria-autocomplete') ?? '';
+  if (!SEARCH_AUTOCOMPLETE_VALUES.includes(autocomplete)) return entry;
+  const isTextField = !entry.field.custom && TEXT_LIKE.has(entry.field.type);
+  // A generic input combobox with aria-autocomplete is a search field here, not a dropdown.
+  if (!isTextField && entry.field.custom?.pattern !== 'input-combobox') return entry;
+  entry.field.type = 'text';
+  entry.field.htmlType = 'search';
+  entry.field.custom = {
+    pattern: 'search-input',
+    supported: SEARCH_RELATIONSHIP_ATTRIBUTES.some((name) => control.hasAttribute(name)),
+  };
   return entry;
 }
 
