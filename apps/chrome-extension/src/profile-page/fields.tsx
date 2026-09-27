@@ -114,38 +114,34 @@ export function YesNoField({ label, value, onChange }: YesNoFieldProps) {
   );
 }
 
-interface CheckboxGroupProps<T extends string> {
-  legend: string;
-  options: readonly T[];
-  labels: Readonly<Record<T, string>>;
-  value: readonly T[] | undefined;
-  onChange: (value: T[]) => void;
+interface SelectFieldProps {
+  label: string;
+  options: readonly { value: string; label: string }[];
+  value: string | undefined;
+  onChange: (value: string | undefined) => void;
+  error?: string;
 }
 
-export function CheckboxGroup<T extends string>({
-  legend,
-  options,
-  labels,
-  value = [],
-  onChange,
-}: CheckboxGroupProps<T>) {
-  const toggle = (option: T, checked: boolean) =>
-    // Rebuild from `options` to keep a stable order.
-    onChange(options.filter((o) => (o === option ? checked : value.includes(o))));
-
+/** One of a fixed set of choices, or not specified. */
+export function SelectField({ label, options, value, onChange, error }: SelectFieldProps) {
   return (
-    <fieldset className="field checkbox-group">
-      <legend>{legend}</legend>
-      {options.map((option) => (
-        <label key={option}>
-          <input
-            type="checkbox"
-            checked={value.includes(option)}
-            onChange={(event) => toggle(option, event.target.checked)}
-          />
-          {labels[option]}
-        </label>
-      ))}
-    </fieldset>
+    <FieldFrame label={label} error={error}>
+      {({ id, describedBy }) => (
+        <select
+          id={id}
+          value={value ?? ''}
+          onChange={(event) => onChange(event.target.value || undefined)}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+        >
+          <option value="">Not specified</option>
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      )}
+    </FieldFrame>
   );
 }

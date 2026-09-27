@@ -6,21 +6,34 @@
  * gradually and a missing value must never be guessed.
  */
 
-/** Bump when the persisted shape changes so stored profiles can be migrated. */
-export const PROFILE_SCHEMA_VERSION = 1;
+import type { EMPLOYMENT_TYPE_CHOICES, WORK_MODE_CHOICES } from '@applyonce/core';
+
+/**
+ * Bump when the persisted shape changes, and add a step to migrate-profile.ts.
+ *
+ * - 1: initial profile (Phase 1).
+ * - 2: single primary education record, single work mode and employment type, website.
+ */
+export const PROFILE_SCHEMA_VERSION = 2;
 
 export interface Profile {
   schemaVersion: typeof PROFILE_SCHEMA_VERSION;
   identity: Identity;
   contact: Contact;
   location: Location;
-  education: EducationEntry[];
+  /** The primary (highest) education record. Multiple records are not supported yet. */
+  education: Education;
   experience: Experience;
   links: Links;
   preferences: Preferences;
   authorization: Authorization;
   documents: Documents;
   customAnswers: CustomAnswer[];
+  /**
+   * Data from an older profile version that the current model cannot represent (e.g. a
+   * second education entry). Kept so migration never destroys data; not used for filling.
+   */
+  legacy?: LegacyProfileData;
 }
 
 export interface Identity {
@@ -45,7 +58,7 @@ export interface Location {
   postalCode?: string;
 }
 
-export interface EducationEntry {
+export interface Education {
   institution?: string;
   degree?: string;
   fieldOfStudy?: string;
@@ -75,18 +88,16 @@ export interface Links {
   linkedin?: string;
   github?: string;
   portfolio?: string;
+  website?: string;
 }
 
-export const WORK_MODES = ['remote', 'hybrid', 'onsite'] as const;
-export type WorkMode = (typeof WORK_MODES)[number];
-
-export const EMPLOYMENT_TYPES = ['full-time', 'part-time', 'contract', 'internship'] as const;
-export type EmploymentType = (typeof EMPLOYMENT_TYPES)[number];
+export type WorkMode = (typeof WORK_MODE_CHOICES)[number]['value'];
+export type EmploymentType = (typeof EMPLOYMENT_TYPE_CHOICES)[number]['value'];
 
 export interface Preferences {
-  workModes?: WorkMode[];
+  workMode?: WorkMode;
+  employmentType?: EmploymentType;
   openToRelocation?: boolean;
-  employmentTypes?: EmploymentType[];
 }
 
 export interface Authorization {
@@ -121,4 +132,14 @@ export interface CustomAnswer {
   question: string;
   answer: string;
   companyScope?: string;
+}
+
+/** Values from older versions that did not fit the current model, preserved verbatim. */
+export interface LegacyProfileData {
+  /** Education entries after the first (version 1 allowed a list). */
+  education?: Education[];
+  /** Work modes after the first (version 1 allowed several). */
+  workModes?: string[];
+  /** Employment types after the first (version 1 allowed several). */
+  employmentTypes?: string[];
 }

@@ -5,7 +5,7 @@ import {
   type MatchReason,
   type ProfileFieldKey,
 } from '@applyonce/core';
-import { AUTOCOMPLETE_TOKENS, DEFAULT_ALIASES } from './aliases';
+import { AUTOCOMPLETE_TOKENS, DEFAULT_ALIASES, WEAK_ALIASES } from './aliases';
 import type { FieldSignature } from './field-signature';
 import type { FieldMatch, FieldMatcher } from './matcher';
 import { compactText, normalizeText } from './normalize';
@@ -15,7 +15,7 @@ import { compactText, normalizeText } from './normalize';
  * forms. With the thresholds in core (high ≥ 90, review ≥ 70, confirm ≥ 40):
  *
  * - exact label or autocomplete + compatible type → high (a clear exact match)
- * - name/id alone, placeholder, label containment, nearby text → review at most
+ * - name/id alone, placeholder, label containment, weak alias, nearby text → review at most
  * - name/id + placeholder, or label + name → high
  */
 export const SIGNAL_WEIGHTS = {
@@ -24,6 +24,7 @@ export const SIGNAL_WEIGHTS = {
   identifier: 40,
   placeholder: 40,
   labelContains: 40,
+  weakLabel: 40,
   nearbyText: 30,
   fieldType: 10,
 } as const;
@@ -39,6 +40,8 @@ interface AliasSet {
   compact: ReadonlySet<string>;
   /** Normalized multi-word phrases, for containment in longer labels. */
   phrases: readonly string[];
+  /** Ambiguous words (see WEAK_ALIASES), compared exactly against labels only. */
+  weak: ReadonlySet<string>;
 }
 
 /**
@@ -47,13 +50,19 @@ interface AliasSet {
  */
 export function createAliasMatcher(
   aliases: Readonly<Partial<Record<ProfileFieldKey, readonly string[]>>> = DEFAULT_ALIASES,
+  weakAliases: Readonly<Partial<Record<ProfileFieldKey, readonly string[]>>> = WEAK_ALIASES,
 ): FieldMatcher {
   const aliasSets = new Map<ProfileFieldKey, AliasSet>();
-  for (const [key, phrases] of Object.entries(aliases) as [ProfileFieldKey, readonly string[]][]) {
-    const normalized = phrases.map(normalizeText);
+  const keys = new Set([
+    ...Object.keys(aliases),
+    ...Object.keys(weakAliases),
+  ]) as Set<ProfileFieldKey>;
+  for (const key of keys) {
+    const phrases = aliases[key] ?? [];
     aliasSets.set(key, {
       compact: new Set(phrases.map(compactText)),
-      phrases: normalized.filter((phrase) => phrase.includes(' ')),
+      phrases: phrases.map(normalizeText).filter((phrase) => phrase.includes(' ')),
+      weak: new Set((weakAliases[key] ?? []).map(compactText)),
     });
   }
 
@@ -88,6 +97,8 @@ function scoreCandidate(
 ): FieldMatch | undefined {
   const equals = (text: string | undefined) =>
     text !== undefined && aliasSet.compact.has(compactText(text));
+  const weakEquals = (text: string | undefined) =>
+    text !== undefined && aliasSet.weak.has(compactText(text));
   const contains = (text: string | undefined) =>
     text !== undefined && aliasSet.phrases.some((phrase) => ` ${text} `.includes(` ${phrase} `));
 
@@ -114,7 +125,13 @@ function scoreCandidate(
     equals(signature.label) && 'label',
     equals(signature.ariaLabel) && 'aria-label',
   );
-  if (!exactLabel) {
+  const weakLabel =
+    !exactLabel &&
+    add(
+      SIGNAL_WEIGHTS.weakLabel,
+      (weakEquals(signature.label) || weakEquals(signature.ariaLabel)) && 'weak-alias',
+    );
+  if (!exactLabel && !weakLabel) {
     add(
       SIGNAL_WEIGHTS.labelContains,
       (contains(signature.label) || contains(signature.ariaLabel)) && 'label-contains',

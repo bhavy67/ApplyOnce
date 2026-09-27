@@ -1,5 +1,5 @@
 import type { LocalStore } from '@applyonce/core';
-import { createEmptyProfile, PROFILE_SCHEMA_VERSION, type Profile } from '@applyonce/profile';
+import { createEmptyProfile, migrateProfile, type Profile } from '@applyonce/profile';
 import type { SavedMappingsRecord } from './saved-mapping-repository';
 
 /** Everything the extension persists locally, by storage key. */
@@ -28,14 +28,16 @@ export function createProfileRepository(
 ): ProfileRepository {
   return {
     async load() {
-      const stored = await store.get('profile');
+      const stored: unknown = await store.get('profile');
       if (stored === undefined) return createEmptyProfile();
-      // When PROFILE_SCHEMA_VERSION is bumped, migrate older versions here. Never
-      // silently discard a profile we do not understand.
-      if (stored.schemaVersion !== PROFILE_SCHEMA_VERSION) {
-        throw new UnsupportedProfileVersionError(stored.schemaVersion);
+      // Older versions are migrated in memory; the migrated profile is written on the next
+      // save. Data we do not understand is refused, never silently discarded.
+      const profile = migrateProfile(stored);
+      if (!profile) {
+        const version = typeof stored === 'object' && stored !== null && 'schemaVersion' in stored;
+        throw new UnsupportedProfileVersionError(version ? stored.schemaVersion : undefined);
       }
-      return stored;
+      return profile;
     },
     save: (profile) => store.set('profile', profile),
     clear: () => store.remove('profile'),

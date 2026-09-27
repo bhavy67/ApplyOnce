@@ -2,11 +2,12 @@ import type { Profile } from './profile';
 
 /**
  * Number of values the user has entered (non-blank text, numbers, booleans, list items'
- * values). Metadata such as `schemaVersion` is not counted. Useful for reporting that a
+ * values). Metadata such as `schemaVersion`, and legacy data, are not counted. Useful for reporting that a
  * profile exists without exposing any of its values.
  */
 export function countProfileValues(profile: Profile): number {
-  return countValues({ ...profile, schemaVersion: undefined });
+  // Legacy data is kept from older versions but is not part of the usable profile.
+  return countValues({ ...profile, schemaVersion: undefined, legacy: undefined });
 }
 
 function countValues(value: unknown): number {

@@ -243,3 +243,8 @@ dialog h2 {
 .small {
   font-size: 12px;
 }
+
+.legacy ul {
+  margin: 0;
+  padding-left: 20px;
+}

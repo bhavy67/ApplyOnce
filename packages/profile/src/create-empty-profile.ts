@@ -6,7 +6,7 @@ export function createEmptyProfile(): Profile {
     identity: {},
     contact: {},
     location: {},
-    education: [],
+    education: {},
     experience: { workHistory: [] },
     links: {},
     preferences: {},

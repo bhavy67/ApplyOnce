@@ -143,6 +143,32 @@ describe('teaching', () => {
     ).toBe(true);
   });
 
+  it('offers the Phase 5 fields through the same definitions', () => {
+    expect(teachOptions('text').map((o) => o.key)).toEqual(
+      expect.arrayContaining([
+        'website_url',
+        'current_title',
+        'highest_degree',
+        'field_of_study',
+        'institution',
+        'graduation_year',
+        'work_mode',
+        'employment_type',
+      ]),
+    );
+    expect(teachOptions('select').map((o) => o.key)).toEqual(
+      expect.arrayContaining(['work_mode', 'employment_type', 'highest_degree', 'graduation_year']),
+    );
+    expect(teachOptions('number').map((o) => o.key)).toEqual([
+      'postal_code',
+      'experience_years',
+      'graduation_year',
+    ]);
+    expect(teachOptions('select').find((o) => o.key === 'employment_type')?.label).toBe(
+      'Employment type',
+    );
+  });
+
   it('builds the selector from the canonical profile field definitions for this field type', () => {
     const textOptions = teachOptions('text').map((o) => o.key);
     expect(textOptions).toEqual(
@@ -150,8 +176,8 @@ describe('teaching', () => {
     );
     expect(textOptions).toContain('city');
     expect(teachOptions('checkbox').map((o) => o.key)).toEqual([
-      'requires_sponsorship',
       'willing_to_relocate',
+      'requires_sponsorship',
     ]);
     expect(teachOptions('text').find((o) => o.key === 'postal_code')?.label).toBe('Postal code');
   });

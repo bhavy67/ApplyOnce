@@ -12,7 +12,7 @@ const sampleProfile: Profile = {
   ...createEmptyProfile(),
   identity: { firstName: 'Jane', lastName: 'Doe' },
   contact: { email: 'jane@example.com' },
-  education: [{ institution: 'Example University', graduationYear: 2019 }],
+  education: { institution: 'Example University', graduationYear: 2019 },
 };
 
 describe('profile repository', () => {
@@ -58,10 +58,74 @@ describe('profile repository', () => {
       factory,
     });
     // Simulates data written by a future version of the extension.
-    await store.set('profile', { ...sampleProfile, schemaVersion: 2 } as unknown as Profile);
+    await store.set('profile', { ...sampleProfile, schemaVersion: 99 } as unknown as Profile);
 
     await expect(createProfileRepository(store).load()).rejects.toBeInstanceOf(
       UnsupportedProfileVersionError,
     );
+  });
+});
+
+describe('profile repository: upgrading a version 1 (Phase 1–4) profile', () => {
+  const phase4Profile = {
+    schemaVersion: 1,
+    identity: { firstName: 'Jane', lastName: 'Doe' },
+    contact: { email: 'jane.doe@example.com' },
+    location: { city: 'Springfield' },
+    education: [
+      { institution: 'Example University', degree: 'MSc' },
+      { institution: 'First College', degree: 'BSc' },
+    ],
+    experience: { currentCompany: 'Example Co', workHistory: [] },
+    links: { linkedin: 'https://www.linkedin.com/in/jane-doe-example' },
+    preferences: {
+      workModes: ['hybrid'],
+      employmentTypes: ['contract', 'full-time'],
+      openToRelocation: true,
+    },
+    authorization: {},
+    documents: { resumes: [], coverLetters: [] },
+    customAnswers: [],
+  };
+
+  it('loads, migrates, saves as version 2, and loads again with every value kept', async () => {
+    const store = createIndexedDbStore<ExtensionStorageSchema>({
+      databaseName: 'upgrade-test',
+      factory: new IDBFactory(),
+    });
+    await store.set('profile', phase4Profile as unknown as Profile);
+    await store.set('savedMappings', {
+      version: 1,
+      mappings: [
+        {
+          key: 'v1|text|q=preferred working location|c=|i=',
+          parts: { fieldType: 'text', question: 'preferred working location' },
+          profileField: 'city',
+          createdAt: '2026-09-01T00:00:00.000Z',
+          updatedAt: '2026-09-01T00:00:00.000Z',
+        },
+      ],
+    });
+    const repository = createProfileRepository(store);
+
+    const loaded = await repository.load();
+    expect(loaded).toMatchObject({
+      schemaVersion: 2,
+      identity: { firstName: 'Jane', lastName: 'Doe' },
+      education: { institution: 'Example University', degree: 'MSc' },
+      preferences: { workMode: 'hybrid', employmentType: 'contract', openToRelocation: true },
+      legacy: {
+        education: [{ institution: 'First College', degree: 'BSc' }],
+        employmentTypes: ['full-time'],
+      },
+    });
+    // Loading alone never writes.
+    expect(await store.get('profile')).toEqual(phase4Profile);
+
+    await repository.save(loaded);
+    expect((await store.get('profile'))?.schemaVersion).toBe(2);
+    expect(await repository.load()).toEqual(loaded);
+    // Saved mappings are a separate record and are untouched by the upgrade.
+    expect((await store.get('savedMappings'))?.mappings).toHaveLength(1);
   });
 });

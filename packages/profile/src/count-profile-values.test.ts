@@ -12,8 +12,9 @@ describe('countProfileValues', () => {
       identity: { firstName: 'Jane', lastName: '  ' },
       experience: { totalExperienceYears: 0, workHistory: [] },
       authorization: { requiresSponsorship: false },
-      preferences: { workModes: ['remote', 'hybrid'] },
-      education: [{ institution: 'Example University', graduationYear: 2019 }],
+      preferences: { workMode: 'remote', employmentType: 'full-time' },
+      education: { institution: 'Example University', graduationYear: 2019 },
+      legacy: { workModes: ['hybrid'] },
     });
 
     expect(count).toBe(7);

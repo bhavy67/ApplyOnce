@@ -30,10 +30,33 @@ export const DEFAULT_ALIASES: Readonly<Partial<Record<ProfileFieldKey, readonly 
   country: ['country', 'country of residence'],
   postal_code: ['postal code', 'zip', 'zip code', 'postcode', 'pin code', 'zip postal code'],
   linkedin_url: ['linkedin', 'linkedin profile', 'linkedin url', 'linkedin profile url'],
-  github_url: ['github', 'github profile', 'github url'],
-  portfolio_url: ['portfolio', 'website', 'personal website', 'portfolio url', 'portfolio website'],
-  current_company: ['current company', 'current employer', 'current company name'],
-  current_title: ['current title', 'current job title', 'job title', 'current role'],
+  github_url: ['github', 'github profile', 'github url', 'github profile url'],
+  portfolio_url: [
+    'portfolio',
+    'portfolio url',
+    'portfolio website',
+    'portfolio link',
+    'online portfolio',
+  ],
+  website_url: ['website', 'personal website', 'website url', 'personal site', 'personal web site'],
+  current_company: [
+    'current company',
+    'current employer',
+    'employer',
+    'current company name',
+    'current organization',
+    'current organisation',
+    'employer name',
+  ],
+  current_title: [
+    'job title',
+    'current job title',
+    'current title',
+    'current role',
+    'current position',
+    'current designation',
+    'designation',
+  ],
   experience_years: [
     'years of experience',
     'total experience',
@@ -41,8 +64,73 @@ export const DEFAULT_ALIASES: Readonly<Partial<Record<ProfileFieldKey, readonly 
     'total years of experience',
     'total years of professional experience',
     'years of professional experience',
+    'years of relevant experience',
+    'work experience years',
   ],
   notice_period: ['notice period', 'notice period in days'],
+  work_mode: [
+    'work mode',
+    'preferred work mode',
+    'work arrangement',
+    'preferred work arrangement',
+    'workplace type',
+    'work location type',
+    'remote hybrid on site',
+    'remote hybrid onsite',
+    'remote or on site',
+  ],
+  employment_type: [
+    'employment type',
+    'type of employment',
+    'job type',
+    'preferred job type',
+    'full time part time contract',
+    'full time part time',
+    'full time or part time',
+  ],
+  willing_to_relocate: ['relocate', 'relocation', 'willing to relocate', 'open to relocation'],
+  highest_degree: [
+    'degree',
+    'highest degree',
+    'highest education',
+    'highest education level',
+    'highest level of education',
+    'education level',
+    'level of education',
+    'highest qualification',
+    'degree level',
+  ],
+  field_of_study: [
+    'field of study',
+    'major',
+    'area of study',
+    'course of study',
+    'discipline',
+    'specialization',
+    'specialisation',
+  ],
+  institution: [
+    'university',
+    'college',
+    'school',
+    'institution',
+    'university name',
+    'college name',
+    'school name',
+    'institution name',
+    'name of institution',
+    'educational institution',
+    'college university',
+    'university college',
+  ],
+  graduation_year: [
+    'graduation year',
+    'year of graduation',
+    'grad year',
+    'passing year',
+    'year of passing',
+    'expected graduation year',
+  ],
   work_authorization: ['work authorization', 'work authorisation', 'work permit'],
   requires_sponsorship: [
     'sponsorship',
@@ -53,7 +141,20 @@ export const DEFAULT_ALIASES: Readonly<Partial<Record<ProfileFieldKey, readonly 
     'need sponsorship',
     'need visa sponsorship',
   ],
-  willing_to_relocate: ['relocate', 'relocation', 'willing to relocate', 'open to relocation'],
+};
+
+/**
+ * Ambiguous words that point at a profile field but could also mean something else, e.g.
+ * "Company" (current or target company?) or "Experience" (years or a description?). An
+ * exact label match on one of these is worth less than a real alias, so on its own it
+ * only ever reaches review, never high confidence.
+ */
+export const WEAK_ALIASES: Readonly<Partial<Record<ProfileFieldKey, readonly string[]>>> = {
+  current_company: ['company', 'company name', 'organization', 'organisation'],
+  current_title: ['title', 'position', 'role'],
+  experience_years: ['experience'],
+  highest_degree: ['education', 'qualification'],
+  graduation_year: ['graduation', 'graduation date'],
 };
 
 /** Standard HTML autocomplete tokens that identify a profile field unambiguously. */

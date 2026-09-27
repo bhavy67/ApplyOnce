@@ -8,7 +8,7 @@ describe('createEmptyProfile', () => {
       identity: {},
       contact: {},
       location: {},
-      education: [],
+      education: {},
       experience: { workHistory: [] },
       links: {},
       preferences: {},
@@ -21,9 +21,11 @@ describe('createEmptyProfile', () => {
   it('returns independent instances', () => {
     const a = createEmptyProfile();
     const b = createEmptyProfile();
-    a.education.push({ institution: 'Example University' });
+    a.education.institution = 'Example University';
+    a.experience.workHistory.push({ company: 'Example Co' });
 
-    expect(b.education).toEqual([]);
+    expect(b.education).toEqual({});
+    expect(b.experience.workHistory).toEqual([]);
   });
 
   it('can represent a partially completed profile', () => {
@@ -31,7 +33,7 @@ describe('createEmptyProfile', () => {
       ...createEmptyProfile(),
       identity: { firstName: 'Jane' },
       contact: { email: 'jane@example.com' },
-      preferences: { workModes: ['remote', 'hybrid'] },
+      preferences: { workMode: 'remote' },
     };
 
     expect(profile.identity.lastName).toBeUndefined();

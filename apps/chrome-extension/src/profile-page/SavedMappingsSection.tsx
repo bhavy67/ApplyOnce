@@ -1,5 +1,5 @@
 import { PROFILE_FIELDS, type MappingKeyParts, type SavedMapping } from '@applyonce/core';
-import { PROFILE_FIELD_PATHS } from '@applyonce/profile';
+import { isProfileFieldKey } from '@applyonce/profile';
 import { useEffect, useState } from 'react';
 import { MessageType } from '../messaging/protocol';
 import { sendToServiceWorker } from '../messaging/send';
@@ -75,10 +75,7 @@ export function SavedMappingsSection() {
               <li key={mapping.key}>
                 <div className="mapping-details">
                   <span className="mapping-field">{describeParts(mapping.parts)}</span>
-                  <span className="mapping-target">
-                    → {PROFILE_FIELDS[mapping.profileField].label} (
-                    {PROFILE_FIELD_PATHS[mapping.profileField]})
-                  </span>
+                  <span className="mapping-target">→ {describeTarget(mapping.profileField)}</span>
                   <span className="muted small">
                     {mapping.parts.fieldType} field
                     {mapping.site && ` · taught on ${mapping.site}`} · updated{' '}
@@ -117,6 +114,13 @@ export function SavedMappingsSection() {
 async function fetchMappings(): Promise<ListState> {
   const response = await sendToServiceWorker(MessageType.ListMappings);
   return response.ok ? { status: 'ready', mappings: response.data.mappings } : { status: 'failed' };
+}
+
+/** A mapping may point to a field this version no longer has; it is then never applied. */
+function describeTarget(profileField: string): string {
+  if (!isProfileFieldKey(profileField)) return 'Unknown profile field (not used)';
+  const { label, path } = PROFILE_FIELDS[profileField];
+  return `${label} (${path})`;
 }
 
 function describeParts(parts: MappingKeyParts): string {

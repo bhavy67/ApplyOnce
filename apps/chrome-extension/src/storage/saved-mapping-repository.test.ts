@@ -86,7 +86,9 @@ describe('saved mapping repository', () => {
   });
 
   it('clears all mappings without touching the profile', async () => {
-    await store.set('profile', { schemaVersion: 1 } as ExtensionStorageSchema['profile']);
+    await store.set('profile', {
+      schemaVersion: 1,
+    } as unknown as ExtensionStorageSchema['profile']);
     const repository = open();
     await repository.save({ parts: location, profileField: 'city' });
     await repository.clear();

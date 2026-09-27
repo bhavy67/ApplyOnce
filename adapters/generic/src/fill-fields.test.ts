@@ -279,3 +279,82 @@ describe('option matching helpers', () => {
     expect(toBoolean(value)).toBe(expected);
   });
 });
+
+describe('Phase 5 value types', () => {
+  it.each([
+    [
+      '<option value="remote">Remote</option><option value="hybrid">Hybrid</option>',
+      'remote',
+      'remote',
+    ],
+    [
+      '<option value="Remote">REMOTE</option><option value="Hybrid">HYBRID</option>',
+      'remote',
+      'Remote',
+    ],
+    ['<option value="1">Remote</option><option value="2">Hybrid</option>', 'hybrid', '2'],
+    ['<option value="os">On-site</option><option value="r">Remote</option>', 'onsite', 'os'],
+    [
+      '<option value="FT">Full time</option><option value="PT">Part time</option>',
+      'full-time',
+      'FT',
+    ],
+    [
+      '<option value="full_time">Full-Time</option><option value="contract">Contract</option>',
+      'full-time',
+      'full_time',
+    ],
+  ])('work mode / employment type select %s with %j → %s', (options, value, expected) => {
+    document.body.innerHTML = `<select id="s"><option value="">Select…</option>${options}</select>`;
+    expect(fillOne('id:s', value)).toMatchObject({ status: 'filled' });
+    expect((document.querySelector('#s') as HTMLSelectElement).value).toBe(expected);
+  });
+
+  it('does not treat a combined option such as "Remote / Hybrid" as Remote', () => {
+    document.body.innerHTML =
+      '<select id="s"><option value="">Select…</option><option value="rh">Remote / Hybrid</option><option value="o">On-site</option></select>';
+    expect(fillOne('id:s', 'remote')).toMatchObject({ status: 'failed' });
+    expect((document.querySelector('#s') as HTMLSelectElement).value).toBe('');
+  });
+
+  it('refuses to guess between options that only differ in punctuation', () => {
+    document.body.innerHTML =
+      '<select id="s"><option value="a">Full-time</option><option value="b">Full time</option></select>';
+    expect(fillOne('id:s', 'fulltime')).toMatchObject({ status: 'failed' });
+  });
+
+  it('fills a work mode radio group', () => {
+    document.body.innerHTML = `
+      <fieldset><legend>Work mode</legend>
+        <label><input type="radio" name="mode" value="r"> Remote</label>
+        <label><input type="radio" name="mode" value="h"> Hybrid</label>
+        <label><input type="radio" name="mode" value="o"> On-site</label>
+      </fieldset>`;
+    expect(fillOne('radio:mode', 'onsite')).toMatchObject({ status: 'filled' });
+    expect((document.querySelector('input:checked') as HTMLInputElement).value).toBe('o');
+  });
+
+  it.each([
+    [4.5, '4.5'],
+    [2019, '2019'],
+    [0, '0'],
+  ])('fills number %j', (value, expected) => {
+    document.body.innerHTML = '<input id="n" type="number">';
+    expect(fillOne('id:n', value)).toMatchObject({ status: 'filled' });
+    expect(input('#n').value).toBe(expected);
+  });
+
+  it('selects a year from a graduation year dropdown', () => {
+    document.body.innerHTML =
+      '<select id="y"><option value="">Year</option><option>2018</option><option>2019</option></select>';
+    expect(fillOne('id:y', 2019)).toMatchObject({ status: 'filled' });
+    expect((document.querySelector('#y') as HTMLSelectElement).value).toBe('2019');
+  });
+
+  it('preserves URLs exactly', () => {
+    document.body.innerHTML = '<input id="u" type="url">';
+    const url = 'https://www.linkedin.com/in/jane-doe-example?trk=Profile_Link';
+    expect(fillOne('id:u', url)).toMatchObject({ status: 'filled' });
+    expect(input('#u').value).toBe(url);
+  });
+});

@@ -580,3 +580,117 @@ describe('Teach Once: SaveMapping, ListMappings, DeleteMapping, ClearMappings', 
     });
   });
 });
+
+describe('Phase 5 fields through the service worker', () => {
+  const phase5Profile: Profile = {
+    ...sampleProfile,
+    links: { github: 'https://github.com/jane-doe-example', website: 'https://jane.example.com' },
+    experience: {
+      currentTitle: 'Staff Engineer',
+      currentCompany: 'Example Co',
+      totalExperienceYears: 7,
+      workHistory: [],
+    },
+    preferences: { workMode: 'hybrid', employmentType: 'full-time', openToRelocation: true },
+    education: {
+      degree: 'MSc',
+      fieldOfStudy: 'Physics',
+      institution: 'Example University',
+      graduationYear: 2019,
+    },
+  };
+  const NEW_VALUES = [
+    'github.com/jane-doe-example',
+    'jane.example.com',
+    'Staff Engineer',
+    'Example Co',
+    'Physics',
+    'Example University',
+  ];
+  const preferredType = field('id:ptype', 'select', {
+    htmlId: 'ptype',
+    label: 'What kind of role are you looking for?',
+  });
+
+  it('teaches a new profile field, then fills only its canonical value after approval', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(phase5Profile, fillInTab);
+    const before = await handle(
+      { type: MessageType.MapFields, payload: { fields: [preferredType] } },
+      EXTENSION_PAGE,
+    );
+    expect(before).toMatchObject({ data: { mappings: [{ status: 'unknown' }] } });
+
+    const taught = await handle(
+      {
+        type: MessageType.SaveMapping,
+        payload: { field: preferredType, profileField: 'employment_type' },
+      },
+      EXTENSION_PAGE,
+    );
+    expect(taught).toMatchObject({
+      data: { mapping: { status: 'taught', profileField: 'employment_type', hasValue: true } },
+    });
+    expect(calls).toEqual([]);
+
+    await handle(
+      {
+        type: MessageType.FillPage,
+        payload: {
+          tabId: 7,
+          approvals: [{ field: preferredType, profileField: 'employment_type' }],
+        },
+      },
+      EXTENSION_PAGE,
+    );
+    expect(calls.map((c) => c.instructions.map((i) => i.value))).toEqual([['full-time']]);
+  });
+
+  it('refuses a stored mapping to a profile field this version does not have, but still lists it', async () => {
+    const { handle, store } = await setup(phase5Profile);
+    await store.set('savedMappings', {
+      version: 1,
+      mappings: [
+        {
+          key: 'v1|text|q=employer|c=|i=',
+          parts: { fieldType: 'text', question: 'employer' },
+          profileField: 'favourite_colour' as 'city',
+          createdAt: '2026-09-01T00:00:00.000Z',
+          updatedAt: '2026-09-01T00:00:00.000Z',
+        },
+      ],
+    });
+    const employer = field('id:emp', 'text', { htmlId: 'emp', label: 'Employer' });
+
+    expect(
+      await handle(
+        { type: MessageType.MapFields, payload: { fields: [employer] } },
+        EXTENSION_PAGE,
+      ),
+    ).toMatchObject({
+      data: {
+        mappings: [{ status: 'mapped', source: 'automatic', profileField: 'current_company' }],
+      },
+    });
+    expect(await handle({ type: MessageType.ListMappings }, EXTENSION_PAGE)).toMatchObject({
+      data: { mappings: [{ profileField: 'favourite_colour' }] },
+    });
+  });
+
+  it('does not leak new profile values through status, mapping, or logs', async () => {
+    const { handle } = await setup(phase5Profile);
+    const status = await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE);
+    const fields = [
+      field('id:t', 'text', { htmlId: 't', label: 'Job Title' }),
+      field('id:w', 'text', { htmlId: 'w', label: 'Website' }),
+      field('id:u', 'text', { htmlId: 'u', label: 'University' }),
+    ];
+    const mapped = await handle(
+      { type: MessageType.MapFields, payload: { fields } },
+      EXTENSION_PAGE,
+    );
+    const text = JSON.stringify([status, mapped]);
+    for (const value of NEW_VALUES) expect(text).not.toContain(value);
+    for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
+  });
+});

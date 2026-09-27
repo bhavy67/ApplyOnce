@@ -7,6 +7,8 @@ export type MatchReason =
   | 'aria-label'
   /** A multi-word alias appears inside a longer label, e.g. "Legal first name (as on ID)". */
   | 'label-contains'
+  /** The label is an ambiguous word such as "Company"; never enough for high confidence. */
+  | 'weak-alias'
   | 'placeholder'
   | 'field-type'
   | 'nearby-text'

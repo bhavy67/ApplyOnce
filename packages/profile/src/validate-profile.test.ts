@@ -17,7 +17,7 @@ describe('validateProfile', () => {
         contact: { email: ' jane.doe@example.com ', phone: '+1 (555) 010-0199' },
         links: { linkedin: 'https://www.linkedin.com/in/jane-doe', github: 'github.com/janedoe' },
         experience: { totalExperienceYears: 4.5, workHistory: [] },
-        education: [{ institution: 'Example University', graduationYear: 2019 }],
+        education: { institution: 'Example University', graduationYear: 2019 },
       }),
     );
 
@@ -61,14 +61,69 @@ describe('validateProfile', () => {
     'rejects invalid graduation year %j',
     (graduationYear) => {
       const result = validateProfile(
-        profileWith({ education: [{ institution: 'A' }, { graduationYear }] }),
+        profileWith({ education: { institution: 'A', graduationYear } }),
       );
-      expect(Object.keys(result.errors)).toEqual(['education.1.graduationYear']);
+      expect(Object.keys(result.errors)).toEqual(['education.graduationYear']);
     },
   );
 
   it('treats blank text as not provided', () => {
     const result = validateProfile(profileWith({ contact: { email: '   ', phone: '' } }));
+    expect(result.valid).toBe(true);
+  });
+});
+
+describe('validateProfile: Phase 5 fields', () => {
+  it('accepts valid values for the new fields', () => {
+    const result = validateProfile(
+      profileWith({
+        links: { website: 'https://jane.example.com', portfolio: 'jane.example.dev' },
+        preferences: { workMode: 'hybrid', employmentType: 'contract', openToRelocation: true },
+        education: {
+          degree: 'BSc',
+          fieldOfStudy: 'Physics',
+          institution: 'Example U',
+          graduationYear: 2020,
+        },
+        experience: {
+          currentTitle: 'Engineer',
+          currentCompany: 'Example Co',
+          totalExperienceYears: 0,
+          workHistory: [],
+        },
+      }),
+    );
+    expect(result).toEqual({ valid: true, errors: {} });
+  });
+
+  it.each([
+    [{ links: { website: 'not a website' } }, 'links.website'],
+    [{ preferences: { workMode: 'sometimes' as 'remote' } }, 'preferences.workMode'],
+    [{ preferences: { employmentType: 'freelance' as 'contract' } }, 'preferences.employmentType'],
+    [
+      { preferences: { openToRelocation: 'yes' as unknown as boolean } },
+      'preferences.openToRelocation',
+    ],
+    [{ education: { graduationYear: 20.5 } }, 'education.graduationYear'],
+  ])('rejects invalid value %j', (overrides, path) => {
+    expect(Object.keys(validateProfile(profileWith(overrides as Partial<Profile>)).errors)).toEqual(
+      [path],
+    );
+  });
+
+  it('accepts non-canonical spellings of choices (they are normalized on save)', () => {
+    const result = validateProfile(
+      profileWith({
+        preferences: { workMode: 'REMOTE' as 'remote', employmentType: 'full_time' as 'full-time' },
+      }),
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it('treats blank new fields as not provided', () => {
+    const result = validateProfile(
+      profileWith({ links: { website: '  ' }, education: { institution: '' } }),
+    );
     expect(result.valid).toBe(true);
   });
 });

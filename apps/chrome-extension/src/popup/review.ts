@@ -7,7 +7,6 @@ import {
   type FillStatus,
   type ProfileFieldKey,
 } from '@applyonce/core';
-import { PROFILE_FIELD_PATHS } from '@applyonce/profile';
 import type { ReviewedMapping } from '../messaging/protocol';
 
 export const CONFIDENCE_LABELS: Readonly<Record<ConfidenceLevel, string>> = {
@@ -46,7 +45,8 @@ export function initialSelection(mappings: readonly ReviewedMapping[]): Set<stri
 
 export function profileFieldDescription(mapping: ReviewedMapping): string | undefined {
   if (!mapping.profileField) return undefined;
-  return `${PROFILE_FIELDS[mapping.profileField].label} (${PROFILE_FIELD_PATHS[mapping.profileField]})`;
+  const { label, path } = PROFILE_FIELDS[mapping.profileField];
+  return `${label} (${path})`;
 }
 
 /** Distinguishes what the user taught from what was inferred automatically. */

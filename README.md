@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 4 — Teach Once and saved field mappings: complete.**
+**Phase 5 — Expanded job application profile: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -19,6 +19,9 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 4: you can **Teach** ApplyOnce which profile field an unknown field is, or
   **Change** any mapping. Taught mappings are saved locally and reused on later pages,
   and you can delete them. Teaching never fills anything.
+- Phase 5: the profile covers the fields job applications commonly ask for (current job,
+  work mode, employment type, education, website), all mapped, filled, and teachable
+  through one set of canonical field definitions. Older profiles are migrated safely.
 
 Nothing is ever submitted. Generic HTML forms only; Workday and Greenhouse get dedicated support in later phases.
 
@@ -82,8 +85,14 @@ pnpm install
 1. `pnpm build` (or keep `pnpm dev` running).
 2. Open `chrome://extensions`, enable **Developer mode**.
 3. **Load unpacked** → select `apps/chrome-extension/dist`.
-4. Click the ApplyOnce toolbar icon. After a rebuild, press the reload icon on the extension
-   card.
+4. Click the ApplyOnce toolbar icon.
+
+After every rebuild, press the reload icon on the extension card. This matters: when files
+change on disk, Chrome can keep running the **previous** service worker code, even across a
+browser restart, until the extension is reloaded. Pages and the popup then run new code
+while the service worker runs old code. For example, after the Phase 5 upgrade an old
+service worker refuses the migrated (version 2) profile, and the popup says "Your profile
+could not be loaded" until you reload. No data is lost; reloading fixes it.
 
 ## The profile
 
@@ -99,20 +108,56 @@ pnpm install
 Edits are held in memory until you save. Leaving the page with unsaved changes asks for
 confirmation.
 
-### Model and validation
+### Model and fields
 
-The model lives in `packages/profile` (`Profile`): identity, contact, location, education
-(list), experience (with a `workHistory` list), links, preferences, authorization, documents,
-and custom answers. The editor covers the first eight; documents, custom answers, and work
-history are in the model but have no UI yet, and are preserved when saving.
+The model lives in `packages/profile` (`Profile`, schema version 2). Every mappable field is
+defined once, in `PROFILE_FIELDS` (`packages/core`): its canonical key, path, label, editor
+section, value kind, supported form field types, and choices. That single table drives the
+profile editor, validation, value lookup, the mapper, the Teach selector, and saved-mapping
+validation.
 
-- **Validation** (`validateProfile`) checks the format of values that are present: email,
-  phone, URLs, years of experience (0–70), graduation year (1950 to 10 years ahead). Blank
-  fields are always valid, so a partial profile can be saved.
-- **Completeness** (whether a profile has enough data for a given form) is a separate concern
-  and never blocks saving. It is not implemented yet.
-- **Sanitizing** (`sanitizeProfile`) runs on save: it trims text, removes blank values, and
-  drops empty education entries.
+| Section              | Fields (canonical key → path)                                                                        |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| Personal information | `first_name`, `middle_name`, `last_name`, `full_name` → `identity.*`; `email`, `phone` → `contact.*` |
+| Location             | `address`, `city`, `state`, `country`, `postal_code` → `location.*`                                  |
+| Professional         | `linkedin_url`, `github_url`, `portfolio_url`, `website_url` → `links.*`                             |
+| Employment           | `current_title`, `current_company`, `experience_years`, `notice_period` → `experience.*`             |
+| Job preferences      | `work_mode`, `employment_type`, `willing_to_relocate` → `preferences.*`                              |
+| Education            | `highest_degree`, `field_of_study`, `institution`, `graduation_year` → `education.*`                 |
+| Authorization        | `work_authorization`, `requires_sponsorship` → `authorization.*`                                     |
+
+- **Value types:** every value is a single string, number, or boolean. Work mode is one of
+  remote / hybrid / onsite; employment type is one of full-time / part-time / contract /
+  internship / temporary.
+- **One primary record, not lists:** `education` is your primary (highest) education, and
+  the employment fields describe your current job. Multiple degrees, schools, employers, or
+  certifications are **not supported yet**; that needs repeatable sections, a later phase.
+  `experience.workHistory`, documents, and custom answers remain in the model without UI and
+  are preserved when saving.
+- **Validation** (`validateProfile`) checks each value by its kind: email, phone, URL, years
+  of experience (0–70), graduation year (1950 to 10 years ahead), yes/no, and choices. Blank
+  fields are always valid, so a partial profile can be saved. Completeness is separate and
+  not implemented.
+- **Normalization:** choice values ignore case, spacing, hyphens, and underscores ("REMOTE",
+  "On-site", "full_time", "Full Time" all work) and are stored canonically on save. No
+  synonyms beyond that. **Sanitizing** on save also trims text and removes blank values.
+
+### Migration
+
+Profiles saved by Phases 1–4 (schema version 1) are migrated when loaded
+(`migrateProfile`, pure and idempotent):
+
+- the first education entry becomes the primary education record;
+- the first selected work mode and employment type become the single values;
+- any **additional** entries (a second degree, a second work mode, …) are kept under
+  `legacy`, shown read-only at the bottom of the profile page as "Kept from an earlier
+  version", and never used for filling. Nothing is dropped.
+
+New fields start empty. Loading never writes: the migrated profile is stored (as version 2)
+the next time you save. Unknown or newer versions are refused, never overwritten. Saved
+field mappings are a separate record and are untouched; every existing profile field key
+still exists, so they keep working. A mapping to a key that no longer exists is ignored
+(automatic mapping applies) and shown as "Unknown profile field" so it can be deleted.
 
 ### Where the data is stored
 
@@ -199,10 +244,12 @@ Mapping is deterministic and explainable. Every point of a score comes from a na
 | `name`/`id` equals a known phrase (also the last part of `applicant[first_name]`) | 40     |
 | Placeholder equals a known phrase                                                 | 40     |
 | A multi-word phrase appears inside a longer label                                 | 40     |
+| Label is an ambiguous word ("Company", "Experience", "Title", "Education")        | 40     |
 | Nearby text or fieldset legend equals a known phrase                              | 30     |
 | Field type suits the profile field (only adds to a text match)                    | 10     |
 
-Scores are capped at 100. **High** (≥ 90) → status _mapped_, pre-selected. **Medium** (70–89)
+An ambiguous word on its own therefore reaches review at most; it needs corroborating
+evidence (e.g. `name="employer"`) to become High. Scores are capped at 100. **High** (≥ 90) → status _mapped_, pre-selected. **Medium** (70–89)
 and **Low** (40–69) → status _review_, selectable but never pre-selected. Below 40 → _unknown_,
 never filled. If a second profile field also scores ≥ 50, the result is capped at Medium
 (a _conflict_). A match the field cannot hold (e.g. an email into a checkbox) or a hidden or
@@ -255,8 +302,10 @@ since been deleted or changed is refused.
 - Text-like fields: the value is written with the element's native setter, then `input` and
   `change` events are dispatched, so React, Vue, Angular and plain listeners see the change.
   Fields that already have a value are **skipped**, never overwritten.
-- Select: matched by exact option value, then normalized value, then normalized label. No
-  match or several matches means **failed**, and the selection is left alone.
+- Select and radio: matched by exact option value, then normalized value, then normalized
+  label, then value or label ignoring spaces and punctuation ("onsite" = "On-site"). Always
+  whole-text equality: "Remote / Hybrid" is not "remote". No match or several matches means
+  **failed**, and the selection is left alone.
 - Checkbox: set from yes/no values with a real `click()`. Radio group: the one option that
   matches is clicked (booleans match Yes/No options).
 - Before filling, the page is scanned again and each field is located by its deterministic
@@ -299,8 +348,9 @@ single classic script, because MV3 content scripts cannot be ES modules.
 
 - Workday and Greenhouse extraction and filling (the adapters only recognise their URLs;
   the generic adapter is used everywhere)
-- Education, work history, work mode, and employment type as fill targets (no profile field
-  keys yet)
+- Repeatable sections: multiple degrees, schools, employers, work history entries, or
+  certifications (education and employment are single primary records)
+- Editing `legacy` values carried over by migration (they are read-only)
 - Scoping saved mappings to a site, similarity-based matching of saved mappings, and
   mapping edits from the management view (delete and re-teach instead)
 - Continuous DOM observation (MutationObserver), iframes, shadow DOM, custom widgets,

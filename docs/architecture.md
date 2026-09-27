@@ -9,14 +9,42 @@ apps/chrome-extension ──► adapters/generic ──► packages/field-mapper
           └──► packages/profile ──────────────────────────────────────────► packages/core
 ```
 
-- `packages/core` has no internal dependencies. `packages/profile` uses core's profile
-  field keys (to resolve a key such as `city` to `location.city`).
+- `packages/core` has no internal dependencies. `packages/profile` uses core's canonical
+  field definitions (to resolve a key such as `city` to `location.city`, and to validate).
 - `packages/*` compile with `lib: ["ES2022"]` and no DOM or Node types, so using a browser
   API there is a type error. Keep them platform-independent.
 - `adapters/*` may use DOM types. Adapters depend on shared packages (`core`, and
   `field-mapper` for text normalization), never on another adapter, so Workday and
   Greenhouse logic can evolve independently.
 - Only `apps/chrome-extension` may use `chrome.*` APIs.
+
+## Canonical profile fields
+
+`PROFILE_FIELDS` (`packages/core/profile-field.ts`) is the single source of truth for every
+mappable profile field: key, path (`<section>.<property>`, always two levels), label, editor
+section, value kind (`text`, `email`, `phone`, `url`, `years`, `year`, `boolean`, `choice`),
+supported form field types, and choices. Consumers:
+
+- profile editor (`ProfileForm.tsx`): sections, inputs, and error lookup are generated from it;
+- validation (`validateProfile`): per value kind;
+- value access (`getProfileValue`, `readStoredValue`, `updateProfileValue`): only through
+  canonical paths, so arbitrary paths can never be read or written;
+- mapper: field-type compatibility;
+- Teach selector and saved-mapping validation: `PROFILE_FIELD_KEYS` filtered by field type.
+
+Keys are stable identifiers stored in saved mappings: add keys, never rename or remove them
+without a mapping migration. Aliases stay in `field-mapper/aliases.ts` (matching knowledge,
+not field definitions), including `WEAK_ALIASES` for ambiguous words that may only reach
+review.
+
+## Profile schema and migration
+
+`PROFILE_SCHEMA_VERSION` is 2. `migrateProfile` (`packages/profile`) is pure and
+idempotent: version 2 gets missing sections filled with empty defaults; version 1 (Phases
+1–4) has its education list, work modes, and employment types reduced to single primary
+values, with every additional entry kept under `profile.legacy` (read-only, never filled).
+Unknown versions return undefined and `ProfileRepository.load` throws, so data is refused
+rather than overwritten. Loading never writes; the next save stores version 2.
 
 ## Local persistence
 
