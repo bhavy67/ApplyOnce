@@ -19,8 +19,8 @@ type Listener = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
 
 const SITE_ADAPTERS = [workdayAdapter, greenhouseAdapter];
 
-/** Site adapters that scan and fill; others (the Greenhouse stub) only report the platform. */
-const WORKING_ADAPTERS: ReadonlySet<string> = new Set([workdayAdapter.id]);
+/** Site adapters that scan and fill (all of them now; kept so a future stub stays inert). */
+const WORKING_ADAPTERS: ReadonlySet<string> = new Set([workdayAdapter.id, greenhouseAdapter.id]);
 
 const pageContext = () => ({ url: window.location.href, root: document });
 

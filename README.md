@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 14 — Stable generic field identity + assignment management: complete.**
+**Phase 15 — Greenhouse adapter: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -49,9 +49,11 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 14: assignments follow the field itself (not its position) whenever the page lets
   ApplyOnce tell identical questions apart, and the profile page lists saved assignments so
   you can remove them. See [Field identity](#field-identity).
+- Phase 15: a Greenhouse adapter for public Greenhouse job-board application forms. It uses
+  the same mapper, profile, Teach Once, record assignment, and fill engine, and never fills
+  voluntary self-identification (EEO) questions. See [Greenhouse](#greenhouse).
 
-Nothing is ever submitted. Greenhouse gets dedicated support in a later phase; until then
-it is handled by the generic adapter.
+Nothing is ever submitted.
 
 ## Repository structure
 
@@ -72,8 +74,10 @@ adapters/
                         every page)
   workday/              Workday adapter: detection and Workday-specific scanning on top of
                         the generic adapter (current application step only)
-  greenhouse/           Greenhouse adapter (stub: URL detection only)
+  greenhouse/           Greenhouse adapter: detection and Greenhouse-specific scanning and
+                        react-select reading on top of the generic adapter
 docs/                   Engineering notes (see docs/architecture.md)
+e2e/                    Browser suites per phase and their fixture apps (see e2e/README.md)
 ```
 
 Dependency rules are described in [`docs/architecture.md`](./docs/architecture.md). In short:
@@ -108,6 +112,9 @@ pnpm install
 | `pnpm format`    | Formats all files with Prettier (`pnpm format:check` to verify)    |
 | `pnpm typecheck` | Strict type check of every workspace package                       |
 | `pnpm check`     | typecheck + lint + format check + test + build                     |
+
+Browser suites (real Chrome, fake data, local fixtures) are in `e2e/`; see
+[`e2e/README.md`](./e2e/README.md).
 
 ### Loading the extension in Chrome
 
@@ -791,6 +798,96 @@ Workday application form requires sign-in, which ApplyOnce and its tests never a
 search fields have **not** been verified on a real Workday form; only a read-only Analyze of
 a public Workday job board was run.
 
+## Greenhouse
+
+**What it is.** A thin adapter over the generic one (`adapters/greenhouse`). Only detection,
+the scan scope, and reading react-select's shown selection are Greenhouse-specific. Mapping,
+the profile, Teach Once, repeated-field rules, record assignment, field identity, the
+review popup, and the fill engines (native inputs, selects, radios, checkboxes, and the
+custom-dropdown engine) are exactly the generic ones. All Greenhouse selectors live in
+`adapters/greenhouse/src/selectors.ts`.
+
+**What it was built from.** Public Greenhouse job-board pages were inspected read-only
+(page source only; nothing was typed, uploaded, or submitted). Observed:
+`job-boards.greenhouse.io/<company>/jobs/<id>` serves the application form in the page as
+`form#application-form`, with `.application--questions` sections, semantic control ids
+(`first_name`, `last_name`, `email`, `phone`, `country`, `question_<n>`), labels linked by
+`for`/`aria-labelledby`, and every dropdown built with react-select (`input.select__input`
+with `role="combobox"`). Voluntary self-identification questions are in `.eeoc__container`
+and `#demographic-section`. The location field is an async lookup. Legacy
+`boards.greenhouse.io` URLs redirect to `job-boards`. Company career sites that embed
+Greenhouse (their own domain, or an iframe) are not Greenhouse pages to ApplyOnce.
+
+**Detection.** Greenhouse when either holds, otherwise the generic adapter:
+
+- the page's host is a Greenhouse job-board host (`job-boards.greenhouse.io`,
+  `job-boards.eu.greenhouse.io`, `boards.greenhouse.io`, `boards.eu.greenhouse.io`; not any
+  `*.greenhouse.io` page), or
+- the page has Greenhouse's application form: `form#application-form` containing a
+  `.application--questions` section and at least one `question_<n>` control or react-select
+  input.
+
+The word "Greenhouse" in the page text, a generic form, or a lone class name is never
+evidence.
+
+**Scanning.** The generic scanner, scoped to the application form (job description text is
+never scanned). Each question is one field: react-select's hidden "required" helper input is
+`aria-hidden` and is skipped. Voluntary self-identification sections (gender, race /
+ethnicity, veteran, disability, demographic questions) are left out entirely: they are
+neither listed nor filled. The location lookup (`#candidate-location`, suggestions only
+after typing a search) is listed as **Unsupported**. Greenhouse's ids are authored, stable
+ids, so the Phase 14 field identity uses them. Custom questions ("Why us?", legal
+agreements, open text) map only when their label matches a profile field by the normal
+rules; otherwise they are **No match** and can be taught.
+
+**Supported controls.**
+
+| Control                                 | How it is filled                                               |
+| --------------------------------------- | -------------------------------------------------------------- |
+| Text, email, tel, URL, number, textarea | generic text filler                                            |
+| react-select dropdown                   | generic custom-dropdown engine + react-select selection reader |
+| Native select, radio group, checkbox    | generic engines (not seen on sampled boards; fixture-verified) |
+| Location lookup                         | unsupported (never typed into)                                 |
+| Resume / cover letter upload            | not a field (file inputs are never touched)                    |
+
+react-select shows the chosen option beside an empty input and, on Apple devices, never marks
+options `aria-selected`. The generic engine would therefore see "no value" and could not
+confirm a choice. The Greenhouse filler passes the generic engine a selection reader (the
+`.select__single-value` / `.select__multi-value` text): a dropdown that already shows a
+selection is skipped as an existing value, and a new choice counts only when the control
+shows it. Option matching is the generic one (value/id, then text ignoring case and
+punctuation; exactly one match; no fuzzy matching). Checkboxes follow the generic rule
+(scalar yes/no fields only). Voluntary questions never reach a filler.
+
+**Repeated questions, records, Teach Once.** Unchanged generic behavior: identical
+questions without record context are **Repeated question** (never filled automatically);
+you can assign each copy to a record (Phase 13/14), and Teach Once works as on any page.
+
+**Dynamic forms.** Fill re-scans the page first (no MutationObserver): a question added
+after Analyze is found by Analyze again; a field removed or re-rendered with a different
+identity since Analyze is reported and not filled.
+
+**Safety.** ApplyOnce never clicks Next, Continue, Save, Apply, Submit, or Back, never
+uploads files, never signs in, and never interacts with CAPTCHA. Filling never submits.
+
+**Verification.**
+
+- Unit tests with markup modeled on the observed pages (detection, scanning, EEO
+  exclusion, react-select, identity, safety).
+- Chrome, on a local React fixture that follows the observed Greenhouse markup and uses the
+  real `react-select` library: detection, mapping, filling (text, react-select, native
+  select, radio, checkbox), existing values kept, EEO untouched, repeated questions and
+  record assignment, Teach Once, a question added after Analyze, re-render, privacy, and no
+  navigation or submission.
+- Real Greenhouse: read-only Analyze of one public job-board posting in Chrome (detected as
+  Greenhouse; standard questions mapped; EEO, resume, and helpers not listed; the page was
+  unchanged). **Nothing was filled or submitted on a real Greenhouse page.**
+- Host-only detection is covered by unit tests; it was not isolated in Chrome (local
+  fixtures cannot be served on a Greenhouse host).
+
+Not claimed: support for every Greenhouse form. Embedded boards (iframes), company-hosted
+career pages, file uploads, the location lookup, and multi-page flows are not supported.
+
 ## How the packages are built
 
 Workspace packages are internal and export their TypeScript source directly
@@ -824,8 +921,9 @@ single classic script, because MV3 content scripts cannot be ES modules.
 
 ## Intentionally not implemented yet
 
-- Greenhouse extraction and filling (the adapter only recognises its URLs; the generic
-  adapter handles those pages)
+- Greenhouse: embedded boards (iframes), company-hosted career pages, the location lookup,
+  file uploads, voluntary self-identification questions (never filled, by design), and
+  filling on a real Greenhouse page (only a read-only Analyze was verified)
 - Workday multi-page navigation, repeated blocks without record headings, multi-select search fields
   (several pills), replacing an existing search selection, and verification against a real
   Workday application form (it requires sign-in)

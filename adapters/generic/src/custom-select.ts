@@ -42,11 +42,22 @@ export interface CustomOption {
  *    or the displayed value), re-opening once to check if needed.
  *
  * Anything that is not clearly successful closes the popup (Escape) and fails safely.
+ *
+ * `options.selection` is for widgets that show the current selection outside the control
+ * and do not mark options aria-selected (a site adapter knows where): it returns the
+ * displayed selection ("" when none), and is used both to keep an existing selection and to
+ * confirm the new one.
  */
+export interface CustomSelectOptions {
+  /** The selection the widget currently shows for this control ("" when none). */
+  selection?: (control: HTMLElement) => string | undefined;
+}
+
 export async function fillCustomSelect(
   control: HTMLElement,
   value: FillValue,
   timing: CustomControlTiming = DEFAULT_CUSTOM_CONTROL_TIMING,
+  options: CustomSelectOptions = {},
 ): Promise<Outcome> {
   if (control.tagName === 'INPUT' && (control as HTMLInputElement).value.trim() !== '') {
     return skipped(EXISTING_VALUE);
@@ -54,7 +65,10 @@ export async function fillCustomSelect(
   if (isNavigationAction(control)) {
     return failed('The control is a navigation or submit button, so it was not clicked.');
   }
-  const displayedBefore = displayedValue(control);
+  const shown = (element: HTMLElement) => options.selection?.(element) ?? displayedValue(element);
+  const displayedBefore = shown(control);
+  // A selection shown by the widget is kept, without even opening it.
+  if (options.selection && displayedBefore !== '') return skipped(EXISTING_VALUE);
 
   const listbox = await openListbox(control, timing);
   if (listbox === 'ambiguous')
@@ -64,18 +78,18 @@ export async function fillCustomSelect(
     return closeWith(control, unsupported('Multi-select lists are not supported.'));
   }
 
-  const options = await waitUntil(() => {
+  const listed = await waitUntil(() => {
     const found = readOptions(listbox);
     return found.length > 0 ? found : undefined;
   }, timing);
-  if (!options) return closeWith(control, failed('The list has no options.'));
+  if (!listed) return closeWith(control, failed('The list has no options.'));
 
   const hasSelection =
-    options.some((option) => option.selected) ||
-    (displayedBefore !== '' && options.some((option) => sameText(option.label, displayedBefore)));
+    listed.some((option) => option.selected) ||
+    (displayedBefore !== '' && listed.some((option) => sameText(option.label, displayedBefore)));
   if (hasSelection) return closeWith(control, skipped(EXISTING_VALUE));
 
-  const match = findMatchingOption(options, (option) => option, value);
+  const match = findMatchingOption(listed, (option) => option, value);
   if (match === 'ambiguous') {
     return closeWith(control, failed('No unique option matched: several options match.'));
   }
@@ -89,7 +103,7 @@ export async function fillCustomSelect(
 
   clickSequence(match.element);
   const confirmed =
-    (await waitUntil(() => isConfirmed(control, match) || undefined, timing)) ??
+    (await waitUntil(() => isConfirmed(control, match, shown) || undefined, timing)) ??
     (await confirmByReopening(control, match.label, timing));
   if (isExpanded(control)) closePopup(control);
   return confirmed ? filled() : failed('Unable to confirm the selection.');
@@ -174,11 +188,15 @@ function displayedValue(control: HTMLElement): string {
  * The selection is visible: the chosen option (or, after a re-render, the option with the
  * same label in the current listbox) is aria-selected, or the control shows its label.
  */
-function isConfirmed(control: HTMLElement, option: CustomOption): boolean {
+function isConfirmed(
+  control: HTMLElement,
+  option: CustomOption,
+  shown: (element: HTMLElement) => string = displayedValue,
+): boolean {
   if (option.element.isConnected && option.element.getAttribute('aria-selected') === 'true') {
     return true;
   }
-  if (sameText(displayedValue(control), option.label)) return true;
+  if (sameText(shown(control), option.label)) return true;
   const listbox = findListbox(control);
   return (
     listbox instanceof HTMLElement &&

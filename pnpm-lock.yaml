@@ -111,10 +111,19 @@ importers:
 
   adapters/greenhouse:
     dependencies:
+      '@applyonce/adapter-generic':
+        specifier: workspace:*
+        version: link:../generic
       '@applyonce/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@applyonce/field-mapper':
+        specifier: workspace:*
+        version: link:../../packages/field-mapper
     devDependencies:
+      happy-dom:
+        specifier: 'catalog:'
+        version: 20.14.5
       typescript:
         specifier: 'catalog:'
         version: 6.0.3

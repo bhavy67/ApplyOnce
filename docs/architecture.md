@@ -5,7 +5,7 @@
 ```text
 apps/chrome-extension ──► adapters/generic ──► packages/field-mapper ──► packages/core
           │               adapters/workday ──► adapters/generic, field-mapper, core
-          │               adapters/greenhouse ────────────────────────────► packages/core
+          │               adapters/greenhouse ──► adapters/generic, field-mapper, core
           ├──► packages/field-mapper
           └──► packages/profile ──────────────────────────────────────────► packages/core
 ```
@@ -182,8 +182,7 @@ Radios with the same name in the same form become one field.
 
 **Adapter selection (Phase 8).** The content script picks the first site adapter whose
 `detect` succeeds (Workday, Greenhouse), else the generic adapter, and reports it as the
-platform. A detected adapter scans and fills only once it is implemented (currently
-Workday); the Greenhouse stub's pages use the generic adapter. The generic scanner accepts
+platform. Both site adapters scan and fill (Greenhouse since Phase 15). The generic scanner accepts
 `ScanOptions` (`exclude`, `stableIdentity`, `postProcess`) and `fillFields` accepts a
 `scan` function, so a site adapter reuses the whole engine and fills with the same scan it
 analyzed with. The Workday adapter (`adapters/workday`) is detection (`detect.ts`), one
@@ -225,6 +224,21 @@ them, and `fillFields` skips a field whose fresh scan shows `repeatedCount > 1`
 ("now appears more than once"). The popup shows "Repeated question · no record context"
 (`mappingLine`) for such fields; unknown questions inside recognized record blocks keep
 "No match".
+
+**Greenhouse adapter (Phase 15).** `adapters/greenhouse` is detection (`detect.ts`: an
+exact job-board host, or `form#application-form` with a questions section and a
+`question_<n>` id or react-select input), one selectors file (`selectors.ts`), a scan
+(`scan.ts`: `scanControls` scoped to the application form, with `ScanOptions.exclude` for
+voluntary self-identification sections and `postProcess` marking the location lookup as an
+unsupported `search-input`), and a filler (`greenhouse-adapter.ts`: `fillFields` with that
+scan and a `fillCustom` hook that sends react-select inputs to the generic
+`fillCustomSelect`). One platform-neutral addition supports it:
+`fillCustomSelect(control, value, timing, { selection })`. `CustomSelectOptions.selection`
+reads the selection a widget shows when it keeps it outside the control and outside
+`aria-selected` (react-select on Apple devices). With a reader, a non-empty shown selection
+is an existing value (skipped), and confirmation requires the reader to show the matched
+option. Without one, behavior is unchanged. No mapper, profile, approval, Teach Once, or
+fill engine is Greenhouse-specific. Browser suites live in `e2e/` (`e2e/README.md`).
 
 **Field identity and assignment management (Phase 14).** After repeated-question marking,
 `scanControls` runs `markFieldIdentity` (`adapters/generic/field-identity.ts`): every field

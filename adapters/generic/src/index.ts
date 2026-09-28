@@ -3,6 +3,7 @@ export {
   clickSequence,
   closePopup,
   DEFAULT_CUSTOM_CONTROL_TIMING,
+  fillCustomSelect,
   findListbox,
   isNavigationAction,
   isSubmitter,
@@ -11,6 +12,7 @@ export {
   waitUntil,
   type CustomControlTiming,
   type CustomOption,
+  type CustomSelectOptions,
 } from './custom-select';
 export * from './fill-outcome';
 export {

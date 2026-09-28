@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import type { FillInstruction, FillValue } from '@applyonce/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { findListbox } from './custom-select';
+import { fillCustomSelect, findListbox } from './custom-select';
 import { fillFields } from './fill-fields';
 import { scanControls, scanFields, type ScannedField } from './scan-fields';
 
@@ -684,5 +684,69 @@ describe('Phase 9: site-specific custom fillers', () => {
       fillCustom: () => undefined,
     });
     expect(declined).toMatchObject({ status: 'unsupported' });
+  });
+});
+
+describe('Phase 15: widgets that show the selection outside the control', () => {
+  /** Opens on mousedown; on click shows the choice in #shown, never marks aria-selected. */
+  function mount(initial = '') {
+    document.body.innerHTML = `
+      <label for="c">Country</label>
+      <div id="wrap"><span id="shown">${initial}</span>
+        <input id="c" role="combobox" aria-autocomplete="list" aria-expanded="false"></div>`;
+    const input = document.getElementById('c') as HTMLInputElement;
+    const state = { opened: 0 };
+    input.addEventListener('mousedown', () => {
+      state.opened += 1;
+      document.body.insertAdjacentHTML(
+        'beforeend',
+        '<div role="listbox" id="lb"><div role="option">Canada</div><div role="option">India</div></div>',
+      );
+      input.setAttribute('aria-controls', 'lb');
+      input.setAttribute('aria-expanded', 'true');
+      document.querySelectorAll('#lb [role=option]').forEach((o) =>
+        o.addEventListener('click', () => {
+          (document.getElementById('shown') as HTMLElement).textContent = o.textContent;
+          document.getElementById('lb')?.remove();
+          input.setAttribute('aria-expanded', 'false');
+        }),
+      );
+    });
+    return { input, state };
+  }
+  const shown = () => document.getElementById('shown')?.textContent ?? '';
+
+  it('confirms a new selection through the selection reader', async () => {
+    const { input } = mount();
+    expect(
+      await fillCustomSelect(
+        input,
+        'India',
+        { timeoutMs: 300, intervalMs: 10 },
+        { selection: shown },
+      ),
+    ).toMatchObject({ status: 'filled' });
+    expect(shown()).toBe('India');
+  });
+
+  it('keeps a shown selection without opening the widget', async () => {
+    const { input, state } = mount('Canada');
+    expect(
+      await fillCustomSelect(
+        input,
+        'India',
+        { timeoutMs: 300, intervalMs: 10 },
+        { selection: shown },
+      ),
+    ).toMatchObject({ status: 'skipped' });
+    expect(state.opened).toBe(0);
+    expect(shown()).toBe('Canada');
+  });
+
+  it('without a reader, such a widget cannot be confirmed (and is reported as failed)', async () => {
+    const { input } = mount();
+    expect(
+      await fillCustomSelect(input, 'India', { timeoutMs: 200, intervalMs: 10 }),
+    ).toMatchObject({ status: 'failed' });
   });
 });

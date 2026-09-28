@@ -1,0 +1,4 @@
+# Everything the browser suites produce: Chrome profiles, builds, screenshots, logs.
+.out/
+# Fixture dependencies (installed by scripts/setup.mjs).
+fixtures/fw/node_modules/

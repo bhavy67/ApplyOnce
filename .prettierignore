@@ -1,3 +1,5 @@
 dist
 coverage
 pnpm-lock.yaml
+# Browser suites: Node harness scripts with their own style (see e2e/README.md).
+e2e

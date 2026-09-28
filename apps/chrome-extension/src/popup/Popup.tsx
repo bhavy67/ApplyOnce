@@ -36,7 +36,8 @@ type PopupState =
 const PLATFORM_NOTES: Readonly<Record<string, string>> = {
   workday:
     'Workday page: ApplyOnce fills the current step only. Move to the next step yourself, then analyze again.',
-  greenhouse: 'Greenhouse page detected. Site-specific support comes later.',
+  greenhouse:
+    'Greenhouse page: ApplyOnce fills this form only. Voluntary self-identification questions are never filled.',
 };
 
 const PLATFORM_NAMES: Readonly<Record<string, string>> = {
