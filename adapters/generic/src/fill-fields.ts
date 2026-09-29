@@ -2,13 +2,15 @@ import type {
   FieldOption,
   FillInstruction,
   FillResult,
+  FillStatus,
   FillValue,
   FormField,
 } from '@applyonce/core';
-import { normalizeText } from '@applyonce/field-mapper';
+import { normalizeQuestion, normalizeText } from '@applyonce/field-mapper';
 import {
   DEFAULT_CUSTOM_CONTROL_TIMING,
   fillCustomSelect,
+  isNavigationAction,
   type CustomControlTiming,
 } from './custom-select';
 import {
@@ -21,6 +23,7 @@ import {
   type Outcome,
 } from './fill-outcome';
 import { findMatchingOption } from './option-match';
+import { guardPage, PAGE_ACTION_BLOCKED } from './page-guard';
 import { scanControls, type FormControl, type ScannedField } from './scan-fields';
 
 export { findMatchingOption } from './option-match';
@@ -42,6 +45,14 @@ export interface FillOptions {
   fillCustom?: CustomFiller;
 }
 
+/**
+ * A site adapter's control-specific filler. It is called only after every generic check
+ * has passed for an approved field (found again, same field, visible, enabled, writable,
+ * not repeated, not a navigation or submit button), receives only that field, its control,
+ * and the one approved value, and runs inside the same page guard and failure isolation.
+ * Its outcome is normalized to a standard result. It is not a second security boundary:
+ * it cannot see the profile, other fields, or approvals.
+ */
 export type CustomFiller = (
   target: { field: FormField; control: HTMLElement },
   value: FillValue,
@@ -55,7 +66,12 @@ export type CustomFiller = (
  * The page is scanned again first and each field is located by its deterministic id in
  * the current DOM, then checked against the metadata recorded at analysis time. So a
  * re-rendered field is still found, while a removed or different field is reported as
- * not found. A failure in one field never stops the others. Never submits anything.
+ * not found. A failure in one field never stops the others. Never submits anything: while
+ * filling, the page guard cancels any submission or navigation, and the field being filled
+ * is reported as failed.
+ *
+ * If the page can no longer be scanned with the adapter's rules, nothing is filled and
+ * every field is reported as unsupported.
  */
 export async function fillFields(
   root: ParentNode,
@@ -66,24 +82,71 @@ export async function fillFields(
     fillCustom,
   }: FillOptions = {},
 ): Promise<FillResult[]> {
-  const current = new Map(scan(root).map((scanned) => [scanned.field.id, scanned]));
+  let scanned: ScannedField[];
+  try {
+    scanned = scan(root);
+  } catch {
+    return instructions.map(({ fieldId }) => ({ fieldId, ...unsupported(UNREADABLE_PAGE) }));
+  }
+  const current = new Map(scanned.map((entry) => [entry.field.id, entry]));
   const results: FillResult[] = [];
-  // Sequential: custom dropdowns open popups, which must not overlap.
-  for (const instruction of instructions) {
-    let outcome: Outcome;
-    try {
-      outcome = await fillOne(
-        current.get(instruction.fieldId),
-        instruction,
-        customControlTiming,
-        fillCustom,
-      );
-    } catch {
-      outcome = failed('Something went wrong while filling this field.');
+  const guard = guardPage(root);
+  try {
+    // Sequential: custom dropdowns open popups, which must not overlap.
+    for (const instruction of instructions) {
+      guard.reset();
+      let outcome: Outcome;
+      try {
+        outcome = normalizeOutcome(
+          await fillOne(
+            current.get(instruction.fieldId),
+            instruction,
+            customControlTiming,
+            fillCustom,
+          ),
+          instruction.value,
+        );
+      } catch {
+        outcome = failed(SOMETHING_WENT_WRONG);
+      }
+      if (guard.tripped()) outcome = failed(PAGE_ACTION_BLOCKED);
+      results.push({ fieldId: instruction.fieldId, ...outcome });
     }
-    results.push({ fieldId: instruction.fieldId, ...outcome });
+  } finally {
+    guard.release();
   }
   return results;
+}
+
+const SOMETHING_WENT_WRONG = 'Something went wrong while filling this field.';
+const UNREADABLE_PAGE = 'ApplyOnce cannot read this page safely now. Analyze it again.';
+const FILL_STATUSES: ReadonlySet<string> = new Set<FillStatus>([
+  'filled',
+  'skipped',
+  'failed',
+  'not-found',
+  'unsupported',
+]);
+
+/**
+ * Every outcome, including a site adapter's, becomes a standard result: a known status and
+ * a short message that never repeats the value being filled.
+ */
+function normalizeOutcome(outcome: unknown, value: FillValue): Outcome {
+  if (
+    typeof outcome !== 'object' ||
+    outcome === null ||
+    !FILL_STATUSES.has((outcome as Outcome).status) ||
+    typeof (outcome as Outcome).message !== 'string'
+  ) {
+    return failed(SOMETHING_WENT_WRONG);
+  }
+  const { status, message } = outcome as Outcome;
+  const text = String(value);
+  if (typeof value !== 'boolean' && text.length >= 3 && message.includes(text)) {
+    return { status, message: status === 'filled' ? 'Filled.' : SOMETHING_WENT_WRONG };
+  }
+  return { status, message };
 }
 
 async function fillOne(
@@ -96,17 +159,14 @@ async function fillOne(
     return { status: 'not-found', message: 'The field is no longer on the page.' };
   }
   const { field, controls } = target;
+  if (!sameQuestion(field, expected)) {
+    return skipped('The question on the page changed. Analyze the page again.');
+  }
   // Re-checked on the page as it is now. A repeated question is filled only when the user
   // assigned this field to a profile record, and only if the repetition is unchanged since
   // Analyze; a question that has become repeated no longer identifies one profile record.
-  // An assigned field must still have the identity it had when it was approved.
-  if (
-    expected.identity &&
-    (field.identity?.key !== expected.identity.key ||
-      field.identity.unique !== expected.identity.unique)
-  ) {
-    return skipped('This field is not the one that was assigned. Analyze again.');
-  }
+  // (The field's identity was checked against a fresh scan by the service worker before
+  // the instruction was sent; fingerprints are never sent to the page.)
   if (expected.repeatedCount !== undefined) {
     if (field.repeatedCount !== expected.repeatedCount) {
       return skipped('The repeated questions on the page changed. Analyze again.');
@@ -121,6 +181,11 @@ async function fillOne(
   if (!control) return { status: 'not-found', message: 'The field is no longer on the page.' };
 
   if (field.custom) {
+    // Never operate a control that is itself a navigation or submit action, whichever
+    // filler would handle it.
+    if (isNavigationAction(control)) {
+      return failed('The control is a navigation or submit button, so it was not clicked.');
+    }
     if (!field.custom.supported) {
       return unsupported('This dropdown does not expose enough information to fill it safely.');
     }
@@ -167,6 +232,11 @@ function matchesExpected(field: FormField, expected: FillInstruction['expected']
   return name !== undefined || htmlId !== undefined || label === expected.label;
 }
 
+/** The field still asks the question it asked at Analyze (ignoring case, spacing, markers). */
+function sameQuestion(field: FormField, expected: FillInstruction['expected']): boolean {
+  return normalizeQuestion(field.signals.label ?? '') === normalizeQuestion(expected.label ?? '');
+}
+
 function fillText(control: TextControl, type: FormField['type'], value: FillValue): Outcome {
   if (typeof value === 'boolean') return unsupported('A yes/no value cannot go in a text field.');
   const text = String(value);
@@ -178,7 +248,18 @@ function fillText(control: TextControl, type: FormField['type'], value: FillValu
 
   setValueWithNativeSetter(control, text);
   notifyChange(control);
-  return control.value === text ? filled() : failed('The page did not accept the value.');
+  return control.value === text || sameReformattedPhone(type, control.value, text)
+    ? filled()
+    : failed('The page did not accept the value.');
+}
+
+/**
+ * Phone inputs often reformat what is entered ("+1 555 010 0199" → "+1 555-010-0199"). That
+ * is still the approved number when exactly the same digits remain, in the same order.
+ */
+function sameReformattedPhone(type: FormField['type'], shown: string, text: string): boolean {
+  const digits = (value: string) => value.replace(/\D/g, '');
+  return type === 'tel' && digits(text) !== '' && digits(shown) === digits(text);
 }
 
 function fillSelect(select: HTMLSelectElement, value: FillValue): Outcome {

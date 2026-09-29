@@ -180,7 +180,8 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
     setFillError(undefined);
     try {
       const filled = await fillApprovedFields(tabId, approvals, page);
-      if (filled) setResults(filled);
+      if (typeof filled === 'string') setFillError(FAILURE_MESSAGES[filled]);
+      else if (filled) setResults(filled);
       else setFillError('Filling failed. Analyze the page again and retry.');
     } catch {
       setFillError('Filling failed. Analyze the page again and retry.');

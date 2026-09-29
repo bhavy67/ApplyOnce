@@ -106,8 +106,9 @@ apps/chrome-extension/src/profile-page   React UI; talks only to ProfileReposito
  │ content script        │ ◄─── Ping/ScanPage ─ │ popup                │
  │  (isolated world,     │ ── PageScan ───────► │  analyze/review/fill │
  │   injected on click)  │                      └──────────┬───────────┘
- │  generic adapter:     │                                 │ MapFields
- │  scan, fill           │ ◄── FillFields ──┐              │ FillPage
+ │  resolved adapter:    │                                 │ MapFields
+ │  scan, fill           │ ◄── ScanPage, ───┐              │ FillPage
+ │                       │     FillFields   │              │
  └──────────┬────────────┘  (approved pairs) │             │ (fields + approvals,
             │ GetProfileStatus               │             │  never values)
             ▼                                │             ▼
@@ -141,10 +142,17 @@ apps/chrome-extension/src/profile-page   React UI; talks only to ProfileReposito
   web page, so they get `GetProfileStatus` (`{ hasData, valueCount }`) and, on Fill, a
   `FillFields` message with only the approved field/value pairs. `MapFields` returns
   `hasValue` flags, not values, so the popup never holds profile values either.
-- **Fill checks.** For each approval the service worker re-runs the mapper on the field
-  and requires the same profile field with status _mapped_ or _review_, checks the field
-  type can hold it, and looks up the value. Anything else becomes a result (failed,
-  unsupported, skipped) and is never sent to the page.
+- **Fill checks.** For each approval the service worker re-runs the mapper (with the
+  current saved mappings and assignments) on the field and requires the same profile field
+  with status _mapped_, _review_, _taught_, or _assigned_, checks the field type can hold
+  it, and looks up the value now. Then (Phase 16) it sends `ScanPage` to the tab and
+  requires each field to still exist with the same `identity` (key and uniqueness) as the
+  approved field (`sameIdentity`); `unsupported: true` from the scan makes every field
+  unsupported, no answer makes them failed. Anything else becomes a result (failed,
+  unsupported, skipped, not found) and is never sent to the page. `FillInstruction.expected`
+  has no identity: fingerprints never go to the page, and `isFillInstruction` rejects one.
+- **Handshake at Fill.** `fillApprovedFields` runs the same `GetRuntimeInfo` check before
+  `FillPage`; a stale worker fills nothing.
 - **Build handshake.** `src/build-info.ts` exposes a build id injected by
   `vite.config.ts` (`__APPLYONCE_BUILD_ID__`) into the popup and service worker, which are
   built together. Analyze starts with `GetRuntimeInfo` (extension pages only; returns only
@@ -180,9 +188,19 @@ level (no `<form>` required). Each supported control becomes a `FormField` (core
 
 Radios with the same name in the same form become one field.
 
-**Adapter selection (Phase 8).** The content script picks the first site adapter whose
-`detect` succeeds (Workday, Greenhouse), else the generic adapter, and reports it as the
-platform. Both site adapters scan and fill (Greenhouse since Phase 15). The generic scanner accepts
+**Adapter selection (Phase 8; resolver since Phase 16).** `FormAdapter.detect` returns a
+`PlatformDetection` (`strength`: none / weak / structure / host, plus `evidence` strings).
+`resolvePlatform` (`packages/core/adapter.ts`, called through
+`content/adapters.ts#resolvePageAdapter`) picks the one site adapter with the strongest
+host or structure evidence; weak evidence never selects, a tie is a `conflict` (generic),
+and a throwing detector counts as none, so the adapter list order never matters. The
+platform-neutral helpers `pageHostname` (lowercase, trailing dot removed, no port),
+`isOneOfHosts`, `isSubdomainOf`, `visibleElements` (rendered only), `singleScope`, and
+`PlatformScanError` live in `adapters/generic/platform-evidence.ts`; hosts and selectors stay
+in each adapter. If `getFields` throws (e.g. `singleScope` found two rendered application
+containers), the content script returns `PageScan.unsupported: true` with no fields
+(`unreadable-page` in the popup); `fillFields` catches a throwing scan and reports every field
+unsupported. Nothing falls back to another adapter after a partial read. The generic scanner accepts
 `ScanOptions` (`exclude`, `stableIdentity`, `postProcess`) and `fillFields` accepts a
 `scan` function, so a site adapter reuses the whole engine and fills with the same scan it
 analyzed with. The Workday adapter (`adapters/workday`) is detection (`detect.ts`), one
@@ -255,8 +273,8 @@ version 1 entries match only attribute-based field ids (`id:`, `name:`, `key:` w
 uniquely identified fields. Fields without a unique identity get an unsaved assignment:
 `SaveAssignment` returns a `transient` reviewed mapping without storing it, the popup sends
 `transient: true` with that approval, and the service worker re-validates it at fill.
-Assigned fill instructions carry `expected.identity`; `fillFields` refuses a field whose
-identity changed. Extension-only messages `ListAssignments` (labels only: site, path,
+Since Phase 16 the service worker compares identities against a fresh scan before
+sending (see Fill checks); instructions no longer carry `expected.identity`. Extension-only messages `ListAssignments` (labels only: site, path,
 question, type, "Education 2 · Degree", available, kind), `RemoveAssignment` (a handle built
 from stored data), and `ClearAssignments` back the profile page's Saved assignments section.
 
@@ -368,6 +386,27 @@ profile page ── ListMappings / DeleteMapping / ClearMappings ──► servi
 - **Filling**: unchanged safety model. `FillPage` re-runs the precedence check with the
   current saved mappings, so only fields currently mapped/review/taught to the approved
   profile field are filled, and only their values are sent to the content script.
+
+**Common fill pipeline hardening (Phase 16).** `fillFields` (`adapters/generic`) is the
+only fill pipeline. Per instruction, in order: found again by id with the same type, name,
+id, record; same normalized question (`sameQuestion`, `normalizeQuestion`); repeat count;
+visible, enabled, writable; for custom controls, never a whole-name navigation action
+(`isNavigationAction`) before any hook; then the site hook (`fillCustom`) or the generic
+engine. Each outcome goes through `normalizeOutcome` (known `FillStatus`, string message,
+never containing the value; otherwise a generic failure), and each fill runs inside
+`guardPage` (`page-guard.ts`): capture-phase `submit` listener (preventDefault +
+stopImmediatePropagation) and untrusted-click listener for links leaving the document, both
+removed when the call ends; a tripped guard turns that field's result into `failed`.
+`CustomFiller` hooks receive only `{ field, control }`, the value, and timing. Text fields
+accept a page-reformatted phone number only when the digits are identical
+(`sameReformattedPhone`).
+
+**Adapter contract tests (Phase 16).** `apps/chrome-extension/src/content/adapter-contract.test.ts`
+runs one fixture matrix (the same questions wrapped per platform) through all three
+adapters: resolution, metadata (`isFormField`), identity, every control type, existing
+values, failure isolation, stale mutations, dynamic questions, and no submission; plus
+conflict, look-alike host, and DOM-safety cases for the resolver. `log-failure.test.ts`
+checks that no production code logs except through `logFailure`.
 
 ## Mapping pipeline
 

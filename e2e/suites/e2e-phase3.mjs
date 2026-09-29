@@ -280,7 +280,9 @@ try {
   const recorded = await tab.evaluate(`JSON.stringify(globalThis.__recorded)`, world.id);
   const fillMessages = JSON.parse(recorded).filter((m) => m.type === 'applyonce/fill-fields');
   const values = fillMessages.flatMap((m) => m.payload.instructions.map((i) => i.value));
-  check('content script received only approved field/value pairs', fillMessages.length === 1 && JSON.stringify(values) === JSON.stringify(['Jane', 'Doe', 'jane.doe@example.com', '+1 555 010 0199', 'Springfield', 'Canada', 4.5, PORTFOLIO, true]), JSON.stringify(values));
+  // Since Phase 16 the service worker re-scans the page before filling, so the removed Portfolio
+  // field is refused there and its value is never sent to the page at all.
+  check('content script received only approved field/value pairs (the removed field\'s value not even sent)', fillMessages.length === 1 && JSON.stringify(values) === JSON.stringify(['Jane', 'Doe', 'jane.doe@example.com', '+1 555 010 0199', 'Springfield', 'Canada', 4.5, true]) && !values.includes(PORTFOLIO), JSON.stringify(values));
   check('unapproved profile data never reached the content script', !recorded.includes(LINKEDIN) && !recorded.includes('schemaVersion') && !recorded.includes('identity'));
   const pageAfter = JSON.parse(await tab.evaluate(PAGE_STATE));
   check('full profile not exposed to the page (DOM, storage, globals)', !pageAfter.html.includes(LINKEDIN) && pageAfter.local.length === 0 && pageAfter.session.length === 0 && pageAfter.globals.length === 0);

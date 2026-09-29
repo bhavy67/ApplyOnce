@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ApplyOnce",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Local-first personal autofill for repetitive forms.",
   "permissions": ["activeTab", "scripting"],
   "action": {

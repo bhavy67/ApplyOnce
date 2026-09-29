@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createMessage, isFillResultList, MessageType, parseMessage } from './protocol';
+import { createMessage, isFillResultList, isPageScan, MessageType, parseMessage } from './protocol';
 
 const instruction = {
   fieldId: 'id:email',
@@ -143,5 +143,23 @@ describe('Phase 11 record positions in messages', () => {
     expect(
       parseMessage({ type: MessageType.FillFields, payload: { instructions: [instruction] } }),
     ).toEqual({ ok: false, error: 'malformed-message' });
+  });
+});
+
+describe('Phase 16 privacy and scan results in messages', () => {
+  it('refuses fill instructions that carry a field fingerprint (never sent to the page)', () => {
+    const withIdentity = {
+      ...instruction,
+      expected: { ...instruction.expected, identity: { key: 'fp-0123456789abcdef', unique: true } },
+    };
+    expect(
+      parseMessage({ type: MessageType.FillFields, payload: { instructions: [withIdentity] } }),
+    ).toEqual({ ok: false, error: 'malformed-message' });
+  });
+
+  it('accepts an unsupported page scan, and only the flag value true', () => {
+    const scan = { title: '', platform: 'workday', fields: [], profileStatus: null };
+    expect(isPageScan({ ...scan, unsupported: true })).toBe(true);
+    expect(isPageScan({ ...scan, unsupported: 'yes' })).toBe(false);
   });
 });

@@ -4,47 +4,45 @@
  * in the manifest.
  *
  * It keeps no state between messages and never observes DOM changes. It never receives
- * the profile: only the profile status, and, when the user clicks Fill, the approved
- * field/value pairs. It changes the page only by filling those fields, and never submits.
+ * the profile: only the profile status, scan requests (from the popup, and from the service
+ * worker right before filling), and, when the user clicks Fill, the approved field/value
+ * pairs. It changes the page only by filling those fields, and never submits.
  */
-import { genericAdapter } from '@applyonce/adapter-generic';
-import { greenhouseAdapter } from '@applyonce/adapter-greenhouse';
-import { workdayAdapter } from '@applyonce/adapter-workday';
-import { selectAdapter } from '@applyonce/core';
 import { logFailure } from '../log-failure';
 import { fail, MessageType, ok, parseMessage, type PageScan } from '../messaging/protocol';
 import { sendToServiceWorker } from '../messaging/send';
+import { resolvePageAdapter } from './adapters';
 
 type Listener = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
-
-const SITE_ADAPTERS = [workdayAdapter, greenhouseAdapter];
-
-/** Site adapters that scan and fill (all of them now; kept so a future stub stays inert). */
-const WORKING_ADAPTERS: ReadonlySet<string> = new Set([workdayAdapter.id, greenhouseAdapter.id]);
 
 const pageContext = () => ({ url: window.location.href, root: document });
 
 /**
- * The platform (for display) and the adapter that scans and fills. A detected site
- * adapter is used only once it is implemented; the generic adapter is always the fallback.
+ * Resolved again for every message, so Analyze and Fill use the same rules on the page as
+ * it is now.
  */
-function resolveAdapter(context: ReturnType<typeof pageContext>) {
-  const detected = selectAdapter(SITE_ADAPTERS, genericAdapter, context);
-  return {
-    platform: detected.id,
-    adapter: WORKING_ADAPTERS.has(detected.id) ? detected : genericAdapter,
-  };
-}
+const resolveAdapter = (context: ReturnType<typeof pageContext>) =>
+  resolvePageAdapter(context).adapter;
 
 async function scanPage(): Promise<PageScan> {
   const context = pageContext();
-  const { platform, adapter } = resolveAdapter(context);
-  const fields = adapter.getFields(context);
+  const adapter = resolveAdapter(context);
+  let fields: PageScan['fields'] = [];
+  let unsupported = false;
+  try {
+    fields = adapter.getFields(context);
+  } catch (error) {
+    // The selected adapter cannot read this page safely. It is reported as unsupported,
+    // never re-read with another adapter (which could produce conflicting fields).
+    logFailure(`${adapter.id} scan`, error);
+    unsupported = true;
+  }
   const status = await sendToServiceWorker(MessageType.GetProfileStatus);
   return {
     title: document.title,
-    platform,
+    platform: adapter.id,
     fields,
+    ...(unsupported ? { unsupported: true } : {}),
     profileStatus: status.ok ? status.data : null,
   };
 }
@@ -71,7 +69,7 @@ const listener: Listener = (rawMessage: unknown, _sender, sendResponse) => {
       return true; // Async response.
     case MessageType.FillFields:
       resolveAdapter(pageContext())
-        .adapter.fillFields(pageContext(), message.payload.instructions)
+        .fillFields(pageContext(), message.payload.instructions)
         .then(
           (results) => sendResponse(ok({ results })),
           (error: unknown) => {

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { selectAdapter, type FillInstruction, type FillValue } from '@applyonce/core';
+import { resolvePlatform, type FillInstruction, type FillValue } from '@applyonce/core';
 import { genericAdapter } from '@applyonce/adapter-generic';
 import { createAliasMatcher, mapFields } from '@applyonce/field-mapper';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -73,6 +73,7 @@ describe('platform detection', () => {
       document.body.innerHTML = `<div data-automation-id="${marker}"></div>`;
       expect(detectWorkday(context())).toEqual({
         platform: 'workday',
+        strength: 'structure',
         evidence: [`Workday page container "${marker}"`],
       });
     },
@@ -109,9 +110,9 @@ describe('platform detection', () => {
 
   it('is selected over the generic adapter only with Workday evidence', () => {
     page(textField('a', 'First Name'));
-    expect(selectAdapter([workdayAdapter], genericAdapter, context()).id).toBe('workday');
+    expect(resolvePlatform([workdayAdapter], genericAdapter, context()).adapter.id).toBe('workday');
     document.body.innerHTML = '<form><input name="q"></form>';
-    expect(selectAdapter([workdayAdapter], genericAdapter, context()).id).toBe('generic');
+    expect(resolvePlatform([workdayAdapter], genericAdapter, context()).adapter.id).toBe('generic');
   });
 });
 

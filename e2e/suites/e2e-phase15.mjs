@@ -345,13 +345,13 @@ try {
   const values = JSON.parse(raw).filter((m) => m.type === 'applyonce/fill-fields').flatMap((m) => m.payload.instructions.map((i) => i.value));
   console.log('      values sent: ' + JSON.stringify(values));
   const allowed = new Set(['Jane', 'Doe', 'jane.doe@example.com', '+1 555 010 0199', 'Canada', 'https://www.linkedin.com/in/jane-doe-example', 'https://github.com/jane-doe-example', 'https://jane.example.com', 'Example Co', 'Staff Engineer', 6, 'full-time', 'Authorized to work in Canada', 'hybrid', true, false, 'Springfield', 'Quebec', 'Degree A', 'Degree B', 'https://portfolio.example.com']);
-  // Assigned fields carry their own field fingerprint back to the content script, which computed
-  // it from this page (Phase 14) to re-check the field; anything else would be a leak.
+  // Since Phase 16 no fingerprint reaches the content script: the service worker checks field
+  // identities against a fresh scan before sending anything.
   const fingerprints = [...new Set(raw.match(/fp-[0-9a-f]{16}/g) ?? [])];
   const RECORD_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|m-[0-9a-f]{16}/;
   check('14. only approved values reached the page: no record ids, profile, mappings, or assignments', values.every((v) => allowed.has(v)) && !RECORD_ID.test(raw) && !/schemaVersion|"education":|workExperience|recordAssignments|savedMappings|education@/.test(raw), JSON.stringify(values.filter((v) => !allowed.has(v))));
-  const assignedInstructions = JSON.parse(raw).filter((m) => m.type === 'applyonce/fill-fields').flatMap((m) => m.payload.instructions).filter((i) => i.expected.identity);
-  check('14. field fingerprints appear only in the two assigned fields’ own instructions (echoing the page’s scan)', fingerprints.length === 2 && assignedInstructions.every((i) => i.expected.repeatedCount === 2 && ['id:question_116', 'id:question_117'].includes(i.fieldId)), JSON.stringify(assignedInstructions.map((i) => i.fieldId)));
+  const assignedInstructions = JSON.parse(raw).filter((m) => m.type === 'applyonce/fill-fields').flatMap((m) => m.payload.instructions).filter((i) => i.expected.repeatedCount);
+  check('14. no field fingerprints reach the page (Phase 16); assigned fields carry only their repeat count', fingerprints.length === 0 && assignedInstructions.length === 2 && assignedInstructions.every((i) => i.expected.repeatedCount === 2 && ['id:question_116', 'id:question_117'].includes(i.fieldId)), JSON.stringify(assignedInstructions.map((i) => i.fieldId)));
   const pageState = JSON.parse(await p.tab.evaluate(`JSON.stringify({ html: document.documentElement.outerHTML, local: Object.keys(localStorage), session: Object.keys(sessionStorage), globals: Object.keys(window).filter((k) => /applyonce|profile|assign/i.test(k)) })`));
   const unapproved = ['University A', 'University B', 'Springfield', 'Quebec', 'https://www.linkedin.com/in/jane-doe-example-other'];
   const leakedToDom = unapproved.filter((v) => pageState.html.includes(v));

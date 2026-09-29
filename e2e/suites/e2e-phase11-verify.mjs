@@ -469,7 +469,9 @@ try {
   summary = await fill(p.popup);
   v = await values(p.tab);
   const results = await p.popup.evaluate(`[...document.querySelectorAll('.review-item .note')].map((n) => n.textContent).join(' | ')`);
-  check('12. a block inserted above shifts positions: stale approvals are refused, nothing filled', Object.values(v).every((x) => x === '') && results.includes('Not found'), `${summary} ${results} ${JSON.stringify(v)}`);
+  // Refused either by the page (Not found) or, since Phase 16, already by the service worker's
+  // re-scan (the field at that id now has another identity: "changed since Analyze").
+  check('12. a block inserted above shifts positions: stale approvals are refused, nothing filled', Object.values(v).every((x) => x === '') && /Not found|changed since Analyze/.test(results) && !results.includes('Filled'), `${summary} ${results} ${JSON.stringify(v)}`);
   await close(p);
 
   const logged = consoleLog.join('\n');

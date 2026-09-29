@@ -63,6 +63,13 @@ export type FillInTab = (
   instructions: FillInstruction[],
 ) => Promise<FillResult[] | undefined>;
 
+/**
+ * Scans a tab again (the same scan as Analyze) right before filling. Resolves to the page's
+ * current fields, "unreadable" when the platform adapter cannot read the page safely, or
+ * undefined when the page could not be reached.
+ */
+export type ScanTab = (tabId: number) => Promise<readonly FormField[] | 'unreadable' | undefined>;
+
 export interface ServiceWorkerMessageHandlerOptions {
   repository: ProfileRepository;
   mappings: SavedMappingRepository;
@@ -71,6 +78,7 @@ export interface ServiceWorkerMessageHandlerOptions {
   /** e.g. "chrome-extension://<id>/", from chrome.runtime.getURL(''). */
   extensionOrigin: string;
   fillInTab: FillInTab;
+  scanTab: ScanTab;
 }
 
 const matcher = createAliasMatcher();
@@ -105,6 +113,7 @@ export function createServiceWorkerMessageHandler({
   assignments: recordAssignments,
   extensionOrigin,
   fillInTab,
+  scanTab,
 }: ServiceWorkerMessageHandlerOptions) {
   // Content scripts share a process with the web page. They may only ask for the profile
   // status; everything else about the profile or saved mappings is extension-only.
@@ -167,7 +176,13 @@ export function createServiceWorkerMessageHandler({
         case MessageType.FillPage: {
           const { tabId, approvals, page } = message.payload;
           return ok({
-            results: await fillApproved(tabId, approvals, await loadContext(), fillInTab, page),
+            results: await fillApproved(
+              tabId,
+              approvals,
+              await loadContext(),
+              { fillInTab, scanTab },
+              page,
+            ),
           });
         }
 
@@ -426,28 +441,65 @@ function reviewMappings(
 
 /**
  * Turns approvals into fill instructions, sends only those to the page, and returns one
- * result per approval, in order. Approvals that fail a check here never reach the page.
+ * result per approval, in order. Approvals that fail a check here never reach the page:
+ *
+ * 1. the approval against the current saved mappings, assignments, and profile
+ *    (prepareInstruction: a deleted or changed mapping or assignment is refused, and the
+ *    value is looked up now, never cached from Analyze);
+ * 2. the field against a fresh scan of the page: it must still exist with the identity it had
+ *    at Analyze (same question, section, form, name, type…). This is where fingerprints are
+ *    compared, so they never travel to the page;
+ * 3. then the page re-checks name, id, question, type, record, repetition, and state itself
+ *    right before filling.
  */
 async function fillApproved(
   tabId: number,
   approvals: readonly FieldApproval[],
   context: MappingContext,
-  fillInTab: FillInTab,
+  { fillInTab, scanTab }: { fillInTab: FillInTab; scanTab: ScanTab },
   page?: string,
 ): Promise<FillResult[]> {
   const results: FillResult[] = [];
-  const instructions: FillInstruction[] = [];
-  const instructionSlots: number[] = [];
+  const prepared: { index: number; field: FormField; instruction: FillInstruction }[] = [];
 
   approvals.forEach((approval, index) => {
-    const prepared = prepareInstruction(approval, context, page);
-    if ('status' in prepared) {
-      results[index] = prepared;
-    } else {
-      instructions.push(prepared);
-      instructionSlots.push(index);
-    }
+    const outcome = prepareInstruction(approval, context, page);
+    if ('status' in outcome) results[index] = outcome;
+    else prepared.push({ index, field: approval.field, instruction: outcome });
   });
+
+  const instructions: FillInstruction[] = [];
+  const instructionSlots: number[] = [];
+  if (prepared.length > 0) {
+    const current = await scanTab(tabId);
+    const byId = Array.isArray(current) ? new Map(current.map((f) => [f.id, f])) : undefined;
+    for (const { index, field, instruction } of prepared) {
+      const now = byId?.get(field.id);
+      if (current === undefined) results[index] = pageDidNotRespond(field.id);
+      else if (current === 'unreadable') {
+        results[index] = {
+          fieldId: field.id,
+          status: 'unsupported',
+          message: 'ApplyOnce cannot read this page safely now. Analyze it again.',
+        };
+      } else if (!now) {
+        results[index] = {
+          fieldId: field.id,
+          status: 'not-found',
+          message: 'The field is no longer on the page.',
+        };
+      } else if (!sameIdentity(field, now)) {
+        results[index] = {
+          fieldId: field.id,
+          status: 'skipped',
+          message: 'This field changed since Analyze. Analyze the page again.',
+        };
+      } else {
+        instructions.push(instruction);
+        instructionSlots.push(index);
+      }
+    }
+  }
 
   if (instructions.length > 0) {
     const pageResults = await fillInTab(tabId, instructions);
@@ -456,14 +508,24 @@ async function fillApproved(
       results[instructionSlots[i] ?? i] =
         pageResult?.fieldId === instruction.fieldId
           ? pageResult
-          : {
-              fieldId: instruction.fieldId,
-              status: 'failed',
-              message: 'The page did not respond. Analyze it again.',
-            };
+          : pageDidNotRespond(instruction.fieldId);
     });
   }
   return results;
+}
+
+const pageDidNotRespond = (fieldId: string): FillResult => ({
+  fieldId,
+  status: 'failed',
+  message: 'The page did not respond. Analyze it again.',
+});
+
+/** The field on the page now is the one approved: same fingerprint, same uniqueness. */
+function sameIdentity(approved: FormField, current: FormField): boolean {
+  return (
+    approved.identity?.key === current.identity?.key &&
+    approved.identity?.unique === current.identity?.unique
+  );
 }
 
 /**
@@ -480,7 +542,11 @@ function prepareInstruction(
   const fieldId = field.id;
   const target = resolveProfileTarget(profileField);
   if (!target) {
-    return { fieldId, status: 'failed', message: 'Invalid mapping.' };
+    return {
+      fieldId,
+      status: 'failed',
+      message: 'This field can no longer be filled from your profile. Analyze the page again.',
+    };
   }
   if (!target.fieldTypes.includes(field.type)) {
     return { fieldId, status: 'unsupported', message: 'This field cannot hold that value.' };
@@ -499,7 +565,11 @@ function prepareInstruction(
     mapping?.status === 'taught' ||
     mapping?.status === 'assigned';
   if (!approvable || mapping.profileField !== target.target) {
-    return { fieldId, status: 'failed', message: 'This field does not match that profile field.' };
+    return {
+      fieldId,
+      status: 'failed',
+      message: 'The match for this field changed since Analyze. Analyze the page again.',
+    };
   }
   const value = getProfileValue(profile, target.target);
   if (value === undefined) {
@@ -507,11 +577,10 @@ function prepareInstruction(
   }
   const { name, htmlId, label } = field.signals;
   const record = field.record && { collection: field.record.collection, index: field.record.index };
-  // An assigned repeated field carries only its repeat count and identity to the page (never
-  // the record), and the page refuses the fill if either changed.
+  // An assigned repeated field carries only its repeat count to the page (never the record
+  // or the fingerprint), and the page refuses the fill if it changed.
   const assigned = mapping.status === 'assigned';
   const repeatedCount = assigned ? field.repeatedCount : undefined;
-  const identity = assigned && field.identity ? { ...field.identity } : undefined;
   return {
     fieldId,
     value,
@@ -522,7 +591,6 @@ function prepareInstruction(
       label,
       ...(record ? { record } : {}),
       ...(repeatedCount ? { repeatedCount } : {}),
-      ...(identity ? { identity } : {}),
     },
   };
 }

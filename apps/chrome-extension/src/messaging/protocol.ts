@@ -82,6 +82,11 @@ export interface PageScan {
   /** Adapter that recognised the page ("generic", "workday", "greenhouse"). */
   platform: string;
   fields: FormField[];
+  /**
+   * Set when the platform's adapter could not read the page safely: `fields` is then empty
+   * and nothing can be filled until the page changes.
+   */
+  unsupported?: true;
   /** Null when the profile could not be read. */
   profileStatus: ProfileStatus | null;
 }
@@ -287,6 +292,7 @@ export function isPageScan(value: unknown): value is PageScan {
     typeof value.title === 'string' &&
     typeof value.platform === 'string' &&
     Array.isArray(value.fields) &&
+    (value.unsupported === undefined || value.unsupported === true) &&
     (value.profileStatus === null || isRecord(value.profileStatus))
   );
 }

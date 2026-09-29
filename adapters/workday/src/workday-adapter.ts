@@ -44,7 +44,10 @@ export function fillWorkday(
 export const workdayAdapter: FormAdapter<ParentNode> = {
   id: 'workday',
 
-  detect: (context) => detectWorkday(context).platform === 'workday',
+  detect: (context) => {
+    const { strength, evidence } = detectWorkday(context);
+    return { strength, evidence };
+  },
 
   getFields: ({ root }) => scanWorkdayFields(root),
 

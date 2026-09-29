@@ -55,7 +55,10 @@ export function fillGreenhouse(
 /** Greenhouse job-board application forms (see README: Greenhouse). */
 export const greenhouseAdapter: FormAdapter<ParentNode> = {
   id: 'greenhouse',
-  detect: (context) => detectGreenhouse(context).platform === 'greenhouse',
+  detect: (context) => {
+    const { strength, evidence } = detectGreenhouse(context);
+    return { strength, evidence };
+  },
   getFields: ({ root }) => scanGreenhouseFields(root),
   fillFields: ({ root }, instructions) => fillGreenhouse(root, instructions),
 };

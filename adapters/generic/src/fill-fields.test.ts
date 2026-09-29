@@ -520,3 +520,180 @@ describe('Phase 6: fill safety', () => {
     expect(await fillOne('id:b', 'B')).toMatchObject({ status: 'filled' });
   });
 });
+
+describe('Phase 16: common fill pipeline hardening', () => {
+  const listbox = (id: string, label: string, options: string) =>
+    `<label id="${id}-l">${label}</label><div id="${id}" role="combobox" tabindex="0" aria-labelledby="${id}-l" aria-controls="${id}-list" aria-expanded="false"></div><ul id="${id}-list" role="listbox" hidden>${options}</ul>`;
+
+  it('a page that submits its form when a field changes is stopped; the field fails, the next still fills', async () => {
+    document.body.innerHTML = `<form id="f"><label for="a">City</label><input id="a"><label for="b">Company</label><input id="b"><button>Submit</button></form>`;
+    let submitted = 0;
+    const form = element('#f') as HTMLFormElement;
+    form.addEventListener('submit', () => (submitted += 1));
+    // A page script that submits as soon as City changes.
+    input('#a').addEventListener('change', () => form.requestSubmit());
+    const results = await fillFields(document, [
+      instructionFor('id:a', 'Springfield'),
+      instructionFor('id:b', 'Example Co'),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['failed', 'filled']);
+    expect(results[0]?.message).toMatch(/tried to submit the form or leave the page/);
+    expect(submitted).toBe(0);
+    // The guard is gone after filling: the user's own submit works.
+    form.requestSubmit();
+    expect(submitted).toBe(1);
+  });
+
+  it('a script click on a link that leaves the page is cancelled while filling; in-page links are not', async () => {
+    document.body.innerHTML = `<form><label for="a">City</label><input id="a"></form><a id="away" href="https://elsewhere.example/next">x</a><a id="here" href="#top">y</a>`;
+    const defaults: Record<string, boolean> = {};
+    for (const id of ['away', 'here']) {
+      element(`#${id}`).addEventListener('click', (event) => {
+        defaults[id] = event.defaultPrevented;
+        event.preventDefault(); // keep the test document in place
+      });
+    }
+    input('#a').addEventListener('input', () => {
+      (element('#here') as HTMLElement).click();
+      (element('#away') as HTMLElement).click();
+    });
+    const [result] = await fillFields(document, [instructionFor('id:a', 'Springfield')]);
+    expect(result?.status).toBe('failed');
+    expect(defaults).toEqual({ here: false, away: true });
+  });
+
+  it('a page that can no longer be scanned: every field is unsupported, nothing filled', async () => {
+    document.body.innerHTML = `<label for="a">City</label><input id="a">`;
+    const instruction = instructionFor('id:a', 'Springfield');
+    const results = await fillFields(document, [instruction, { ...instruction, fieldId: 'x' }], {
+      scan: () => {
+        throw new Error('several application containers');
+      },
+    });
+    expect(results).toEqual([
+      {
+        fieldId: 'id:a',
+        status: 'unsupported',
+        message: 'ApplyOnce cannot read this page safely now. Analyze it again.',
+      },
+      {
+        fieldId: 'x',
+        status: 'unsupported',
+        message: 'ApplyOnce cannot read this page safely now. Analyze it again.',
+      },
+    ]);
+    expect(input('#a').value).toBe('');
+  });
+
+  it('custom hooks: run only after the generic checks, results normalized, failures isolated', async () => {
+    document.body.innerHTML =
+      listbox('a', 'Country', '<li role="option">Canada</li>') +
+      listbox('b', 'State', '<li role="option">Quebec</li>') +
+      listbox('c', 'Region', '<li role="option">North</li>') +
+      listbox('d', 'Area', '<li role="option">East</li>');
+    element('#d').setAttribute('aria-disabled', 'true');
+    const seen: string[] = [];
+    const results = await fillFields(
+      document,
+      [
+        instructionFor('id:a', 'Canada'),
+        instructionFor('id:b', 'Quebec'),
+        instructionFor('id:c', 'North'),
+        instructionFor('id:d', 'East'),
+      ],
+      {
+        customControlTiming: { timeoutMs: 100, intervalMs: 5 },
+        fillCustom: ({ field }, value) => {
+          seen.push(field.id);
+          if (field.id === 'id:a') return Promise.resolve({ status: 'bogus', message: 1 } as never);
+          if (field.id === 'id:b')
+            return Promise.resolve({
+              status: 'failed',
+              message: `Could not choose ${String(value)}`,
+            });
+          if (field.id === 'id:c') throw new Error('hook crashed');
+          return undefined;
+        },
+      },
+    );
+    expect(results.map((r) => [r.status, r.message])).toEqual([
+      ['failed', 'Something went wrong while filling this field.'],
+      ['failed', 'Something went wrong while filling this field.'], // never repeats the value
+      ['failed', 'Something went wrong while filling this field.'],
+      ['skipped', 'The field is disabled now.'],
+    ]);
+    // The disabled field never reached the hook.
+    expect(seen).toEqual(['id:a', 'id:b', 'id:c']);
+  });
+
+  it('a custom control that is itself a navigation button is refused before any hook', async () => {
+    document.body.innerHTML = `<form><label id="l">Continue</label><button type="button" id="n" aria-haspopup="listbox" aria-labelledby="l" aria-controls="n-list">Continue</button><ul id="n-list" role="listbox" hidden><li role="option">Yes</li></ul></form>`;
+    let hookCalls = 0;
+    let clicks = 0;
+    element('#n').addEventListener('click', () => (clicks += 1));
+    const [result] = await fillFields(document, [instructionFor('id:n', 'Yes')], {
+      fillCustom: () => {
+        hookCalls += 1;
+        return undefined;
+      },
+    });
+    expect(result).toMatchObject({ status: 'failed' });
+    expect(hookCalls + clicks).toBe(0);
+  });
+
+  it.each<[string, () => void, string]>([
+    ['removed', () => element('#a').remove(), 'not-found'],
+    ['replaced (other name)', () => element('#a').setAttribute('name', 'other'), 'not-found'],
+    ['type changed', () => element('#a').setAttribute('type', 'email'), 'not-found'],
+    [
+      'label changed',
+      () => {
+        element('label').textContent = 'Company';
+      },
+      'skipped',
+    ],
+    ['disabled', () => element('#a').setAttribute('disabled', ''), 'skipped'],
+    ['read-only', () => element('#a').setAttribute('readonly', ''), 'skipped'],
+    [
+      'now repeated',
+      () =>
+        document.body.insertAdjacentHTML('beforeend', '<label>City <input name="city"></label>'),
+      'skipped',
+    ],
+  ])('Analyze → field %s → Fill: refused', async (_, mutate, status) => {
+    document.body.innerHTML = `<label for="a">City</label><input id="a" name="city">`;
+    const instruction = instructionFor('id:a', 'Springfield');
+    mutate();
+    const [result] = await fillFields(document, [instruction]);
+    expect(result?.status).toBe(status);
+    expect((document.querySelector('#a') as HTMLInputElement | null)?.value ?? '').toBe('');
+  });
+});
+
+describe('Phase 16: phone fields reformatted by the page', () => {
+  const formatter = (format: (digits: string) => string) => {
+    input('#p').addEventListener('input', () => {
+      const digits = input('#p').value.replace(/\D/g, '');
+      input('#p').value = format(digits);
+    });
+  };
+
+  it('counts a reformatted number with exactly the same digits as filled', async () => {
+    document.body.innerHTML = '<label for="p">Phone</label><input id="p" type="tel">';
+    formatter((d) => `+${d.slice(0, 1)} ${d.slice(1, 4)}-${d.slice(4, 7)}-${d.slice(7)}`);
+    expect(await fillOne('id:p', '+1 555 010 0199')).toMatchObject({ status: 'filled' });
+    expect(input('#p').value).toBe('+1 555-010-0199');
+  });
+
+  it('still fails when the page changed the digits', async () => {
+    document.body.innerHTML = '<label for="p">Phone</label><input id="p" type="tel">';
+    formatter((d) => d.slice(0, 6));
+    expect(await fillOne('id:p', '+1 555 010 0199')).toMatchObject({ status: 'failed' });
+  });
+
+  it('only for phone fields: other text must be kept exactly', async () => {
+    document.body.innerHTML = '<label for="p">Postal code</label><input id="p" type="text">';
+    formatter((d) => `${d.slice(0, 3)}-${d.slice(3)}`);
+    expect(await fillOne('id:p', '123456')).toMatchObject({ status: 'failed' });
+  });
+});

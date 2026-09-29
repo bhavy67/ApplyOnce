@@ -19,6 +19,8 @@ export type AnalysisFailure =
   | 'injection-failed'
   | 'no-response'
   | 'scan-failed'
+  /** The platform's adapter could not read this page safely; nothing is offered to fill. */
+  | 'unreadable-page'
   | 'profile-unavailable'
   /** The service worker runs a different build (e.g. an unpacked extension not reloaded). */
   | 'extension-updated'
@@ -45,6 +47,8 @@ export const FAILURE_MESSAGES: Readonly<Record<AnalysisFailure, string>> = {
   'injection-failed': 'This page cannot be analyzed.',
   'no-response': 'ApplyOnce could not reach this page. Try reloading it.',
   'scan-failed': 'Something went wrong while analyzing this page.',
+  'unreadable-page':
+    'ApplyOnce cannot read the form on this page safely, so it will not fill it. Nothing was changed.',
   'profile-unavailable': 'Your profile could not be loaded, so fields could not be matched.',
   'extension-updated':
     'ApplyOnce was updated. Reload the extension (chrome://extensions → reload) and try again.',
@@ -96,6 +100,7 @@ export async function analyzeActiveTab(): Promise<AnalysisResult> {
     return failure(response.error === 'no-receiver' ? 'no-response' : 'scan-failed');
   if (!isPageScan(response.data)) return failure('scan-failed');
   const scan = response.data;
+  if (scan.unsupported) return failure('unreadable-page');
 
   const page = pageKeyOf(tab.url);
   const mapped = await sendToServiceWorker(MessageType.MapFields, {
@@ -117,13 +122,16 @@ export async function analyzeActiveTab(): Promise<AnalysisResult> {
 
 /**
  * Asks the service worker to fill the approved fields. The popup never handles profile
- * values: the service worker looks them up and sends them to the page itself.
+ * values: the service worker looks them up and sends them to the page itself. The build
+ * handshake runs first, as for Analyze: a stale worker fills nothing.
  */
 export async function fillApprovedFields(
   tabId: number,
   approvals: FieldApproval[],
   page?: string,
-): Promise<FillResult[] | undefined> {
+): Promise<FillResult[] | AnalysisFailure | undefined> {
+  const runtime = await checkRuntime();
+  if (runtime) return runtime;
   const response = await sendToServiceWorker(MessageType.FillPage, {
     tabId,
     approvals,

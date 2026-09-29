@@ -12,6 +12,9 @@ node e2e/scripts/run-all.mjs     # all suites (or pass a filter, e.g. "phase15")
 ```
 
 - `suites/`: one self-contained script per phase (`e2e-phaseN.mjs`, plus `-verify` suites).
+  `e2e-phase16.mjs` runs one shared fixture matrix on generic, Workday-structured, and
+  Greenhouse-structured pages, and a fake-data fill of one public Greenhouse posting with
+  every write request from the page blocked (never submitted).
 - `fixtures/`: React / Vue / Angular fixture apps (sources only), built into `.out/fixtures`.
 - `scripts/setup.mjs` builds the old versions the upgrade suites start from (Phase 4 and 5
   commits) with `git archive`, so the working tree is never touched.

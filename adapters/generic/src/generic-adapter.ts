@@ -1,15 +1,15 @@
-import type { FormAdapter } from '@applyonce/core';
+import { NO_DETECTION, type FormAdapter } from '@applyonce/core';
 import { fillFields } from './fill-fields';
 import { scanFields } from './scan-fields';
 
 /**
- * Fallback adapter for ordinary HTML forms (spec §16). Used when no site-specific
- * adapter matches, so it accepts every page.
+ * Fallback adapter for ordinary HTML forms (spec §16). Used when no site adapter has strong
+ * evidence (see resolvePlatform); it is never chosen by its own detection.
  */
 export const genericAdapter: FormAdapter<ParentNode> = {
   id: 'generic',
 
-  detect: () => true,
+  detect: () => NO_DETECTION,
 
   getFields: ({ root }) => scanFields(root),
 

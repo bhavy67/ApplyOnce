@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 15 — Greenhouse adapter: complete.**
+**Phase 16 — Cross-ATS hardening + adapter reliability: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -52,6 +52,11 @@ filling. It never submits a form for you. The full product specification is in
 - Phase 15: a Greenhouse adapter for public Greenhouse job-board application forms. It uses
   the same mapper, profile, Teach Once, record assignment, and fill engine, and never fills
   voluntary self-identification (EEO) questions. See [Greenhouse](#greenhouse).
+- Phase 16: the three adapters (generic, Workday, Greenhouse) are held to one contract: a
+  deterministic platform resolver with fixed precedence, safe host and DOM evidence, a clear
+  "cannot read this page" result instead of a silent fallback, a fresh check of every
+  approval against the page and the profile right before filling, and a guard that stops any
+  submission or navigation while filling. See [Platforms and adapters](#platforms-and-adapters).
 
 Nothing is ever submitted.
 
@@ -581,10 +586,18 @@ since been deleted or changed is refused.
   are never chosen.
 - Read-only, hidden, and disabled fields are skipped. Off-screen fields are filled (being
   outside the viewport does not make a field invalid).
-- Before filling, the page is scanned again and each field is located by its deterministic
-  id and checked against its metadata from analysis. A removed or replaced field is
-  **not found**; the others are still filled.
-- Filling never submits, clicks buttons, or touches fields that were not approved.
+- Before filling, the service worker checks each approval against the current saved
+  mappings, assignments, and profile (a deleted or changed mapping or assignment is refused;
+  the value is looked up now, never cached from Analyze), then asks the page for a fresh scan
+  and refuses any field whose identity changed since Analyze. The page then scans again
+  itself, locates each field by its deterministic id, and checks its name, id, question,
+  type, record, repetition, and state. A removed or replaced field is **not found**, a
+  changed one is **skipped**; the others are still filled.
+- Phone fields that the page reformats ("+1 555-010-0199") count as filled only when exactly
+  the same digits remain. Every other value must be kept exactly.
+- Filling never submits, clicks buttons, or touches fields that were not approved. While
+  filling, any form submission or script-driven navigation the page attempts is cancelled,
+  and the field being filled is reported as failed (see Platforms and adapters).
 
 ## Generic form compatibility
 
@@ -695,6 +708,84 @@ are kept; review, unknown, and checkbox-group fields stay untouched; removed and
 re-rendered fields are handled; a field added later is found by Analyze again. The adapter
 uses only standard DOM behavior, with no framework-specific code.
 
+## Platforms and adapters
+
+**Supported platforms.** Generic forms (any page), Workday (the current application step),
+and Greenhouse (public job-board application forms). No platform is claimed to be fully
+supported: see each section for exactly what was verified.
+
+**Architecture.** Every page goes through the same lifecycle:
+
+```text
+platform resolver → adapter scan → FormField[] (common metadata) → deterministic mapper
+→ profile lookup → review and approval → fill (re-checked) → one result per field
+```
+
+Only detection, scan rules, and a few control-specific fill hooks differ per platform
+(Workday: search fields; Greenhouse: reading react-select's shown selection). The mapper,
+profile, Teach Once, record assignment, field identity, approval, fill pipeline, and results
+are shared. Platform selectors stay in each adapter's `selectors.ts`.
+
+**Platform resolver.** Each site adapter reports how strongly the page shows its platform:
+_host_ (one of its own hostnames), _structure_ (its own page structure, rendered), _weak_
+(something other sites could share), or _none_. Rules, in order:
+
+1. Only host and structure evidence select an adapter; weak evidence never does, however
+   many weak signals there are.
+2. The strongest evidence wins: a Greenhouse host with a Workday-like container is
+   Greenhouse, and a Workday host with a Greenhouse-like form is Workday.
+3. Equally strong evidence for two platforms (e.g. both page structures on one page) is a
+   conflict: the generic adapter is used. There is no arbitrary winner, and the order in which
+   adapters are listed never matters.
+4. Otherwise the generic adapter. A detector that fails counts as no evidence.
+
+Hosts are compared after normalization (lowercase, no trailing dot, port ignored): Workday
+needs a proper subdomain of its domains, Greenhouse an exact job-board host. Look-alikes
+(`evilmyworkdayjobs.com`, `myworkdayjobs.com.example.org`,
+`job-boards.greenhouse.io.example.org`) and localhost fixtures get no host evidence. DOM
+evidence counts only when it is rendered: hidden markup, `<template>` content, and platform
+names in text are ignored.
+
+**When a platform adapter cannot read a page.** If the selected adapter cannot scope the page
+safely (e.g. two rendered application containers where there should be one), Analyze shows
+"ApplyOnce cannot read the form on this page safely, so it will not fill it. Nothing was
+changed." and offers nothing to fill. If this happens at Fill time, every field is reported
+as unsupported. The page is never handed to another adapter after being partly read, which
+could produce conflicting fields.
+
+**Approvals are re-checked before anything is filled.** In the service worker: the current
+mapping, saved mapping, or assignment must still give the approved profile field; the value
+is read from the profile now; and a fresh scan of the page must show the field with the same
+identity as at Analyze. The page then re-checks the field itself. So a field that was
+removed, replaced, relabeled, moved to another section, retyped, repeated, disabled, or made
+read-only, a mapping or assignment that was deleted or changed, and a deleted record are all
+refused; a profile edit is picked up. Field fingerprints are compared in the service worker
+and never sent to the page.
+
+**Failure isolation and results.** Every field gets one of the standard results (filled,
+skipped, failed, not found, unsupported) with a short message that never repeats the value.
+One field's failure, including an error in a platform hook, never stops the others. Messages
+never show selectors, element ids, fingerprints, or error details.
+
+**Submission and navigation safety.** ApplyOnce works on the current page only and never
+clicks Next, Continue, Save, Save and Continue, Submit, Apply, Finish, or Back, even when
+such a button is a dropdown trigger or an option. Its only interactions are: writing values
+(native setter + `input`/`change`), a real `click()` on the chosen checkbox or radio, pointer
+events on a dropdown trigger (the click half is never sent to a submit button) and on the
+chosen option, `ArrowDown`/`Escape` keys on dropdowns and search fields, and focus on a
+search field. As a safety net, while a fill runs, any form submission is cancelled before
+the page's handlers see it, and a script-generated click on a link that would leave the page
+is cancelled; the field being filled is then reported as failed. Real clicks by the user are
+never blocked, and the guard is removed when the fill ends. A page script that calls
+`form.submit()` directly or assigns `location` fires no event and cannot be intercepted.
+
+**Verification (Phase 16).** A shared fixture matrix (the same questions on a generic, a
+Workday-structured, and a Greenhouse-structured page) runs in unit tests and in real Chrome:
+detection, scanning, mapping, every control type, existing values, repeated questions and
+record assignment, Teach Once, dynamic questions, re-renders, stale approvals, failure
+isolation, submission safety, privacy, and the build handshake. Real sites: see Workday and
+Greenhouse.
+
 ## Workday
 
 **What it is.** A thin adapter over the generic one. Only platform detection and field
@@ -711,12 +802,15 @@ questions themselves sit behind sign-in, which ApplyOnce never automates, so the
 be observed: the adapter relies on no field-level automation id values, and all selectors
 live in `adapters/workday/src/selectors.ts`.
 
-**Detection** (`detectWorkday`): a Workday host (`*.myworkdayjobs.com`,
-`*.myworkdaysite.com`, `*.myworkday.com`) or one of the page containers above is enough on
-its own; otherwise both many distinct `data-automation-id` values (≥ 10) and Workday
-widget-type attributes are required. The word "Workday" in page text is never evidence.
-Anything else uses the generic adapter, so a weak signal cannot break an ordinary form.
-Tenants on their own domains are recognised by the page containers.
+**Detection** (`detectWorkday`): a Workday host (a subdomain of `myworkdayjobs.com`,
+`myworkdaysite.com`, or `myworkday.com`; never a look-alike such as `evilmyworkdayjobs.com`)
+is host evidence; a rendered page container above is structure evidence; otherwise both many
+distinct rendered `data-automation-id` values (≥ 10) and Workday widget-type attributes
+together are structure evidence, and one of them alone is only weak. Hidden markup and the
+word "Workday" in page text are never evidence. Anything below structure uses the generic
+adapter, so a weak signal cannot break an ordinary form. Tenants on their own domains are
+recognised by the page containers. Two rendered application step containers cannot be
+scoped safely: the page is reported as unreadable (see Platforms and adapters).
 
 **Scanning** (`scanWorkday`, generic scanner plus Workday rules):
 
@@ -820,15 +914,17 @@ Greenhouse (their own domain, or an iframe) are not Greenhouse pages to ApplyOnc
 
 **Detection.** Greenhouse when either holds, otherwise the generic adapter:
 
-- the page's host is a Greenhouse job-board host (`job-boards.greenhouse.io`,
-  `job-boards.eu.greenhouse.io`, `boards.greenhouse.io`, `boards.eu.greenhouse.io`; not any
-  `*.greenhouse.io` page), or
-- the page has Greenhouse's application form: `form#application-form` containing a
-  `.application--questions` section and at least one `question_<n>` control or react-select
-  input.
+- host evidence: the page's host is exactly a Greenhouse job-board host
+  (`job-boards.greenhouse.io`, `job-boards.eu.greenhouse.io`, `boards.greenhouse.io`,
+  `boards.eu.greenhouse.io`; case and a trailing dot ignored; not any `*.greenhouse.io` page),
+  or
+- structure evidence: exactly one rendered `form#application-form` containing a rendered
+  `.application--questions` section and at least one rendered `question_<n>` control or
+  react-select input.
 
-The word "Greenhouse" in the page text, a generic form, or a lone class name is never
-evidence.
+The word "Greenhouse" in the page text, a generic form, a lone class name, hidden markup,
+and a partial or duplicated application form are never enough. Two rendered application
+forms on a Greenhouse host cannot be scoped safely: the page is reported as unreadable.
 
 **Scanning.** The generic scanner, scoped to the application form (job description text is
 never scanned). Each question is one field: react-select's hidden "required" helper input is
@@ -879,9 +975,18 @@ uploads files, never signs in, and never interacts with CAPTCHA. Filling never s
   select, radio, checkbox), existing values kept, EEO untouched, repeated questions and
   record assignment, Teach Once, a question added after Analyze, re-render, privacy, and no
   navigation or submission.
-- Real Greenhouse: read-only Analyze of one public job-board posting in Chrome (detected as
-  Greenhouse; standard questions mapped; EEO, resume, and helpers not listed; the page was
-  unchanged). **Nothing was filled or submitted on a real Greenhouse page.**
+- Real Greenhouse (Phase 15): read-only Analyze of one public job-board posting in Chrome
+  (detected as Greenhouse; standard questions mapped; EEO, resume, and helpers not listed;
+  the page was unchanged).
+- Real Greenhouse (Phase 16): a fake-data fill of the same public posting's form in
+  headless Chrome, with **every write request from the page blocked** (in the final run the page attempted one
+  `POST` to `c.spl.greenhouse.io`, which was blocked; an earlier run attempted none),
+  the default selection only, nothing uploaded, and the tab closed without submitting.
+  First name, last name, email, and LinkedIn were filled and confirmed. The phone number was
+  written but reformatted by the page ("+1 555-010-0199"; counted as filled since Phase 16).
+  The country dropdown found no unique option for "Canada" and failed safely, leaving it
+  empty. One posting only: this is not production validation for Greenhouse forms in
+  general.
 - Host-only detection is covered by unit tests; it was not isolated in Chrome (local
   fixtures cannot be served on a Greenhouse host).
 
@@ -912,6 +1017,12 @@ single classic script, because MV3 content scripts cannot be ES modules.
   you click Fill, only the approved field/value pairs. The popup never receives profile
   values (only whether a value exists). Mapping and fill requests are refused from content
   scripts. Nothing else is written into the page's DOM, globals, storage, or URL.
+- The content script receives only scan requests and the approved field/value pairs with
+  the field metadata needed to find each field again (name, id, question, type, record
+  position, repeat count). Never the profile, records, record ids, assignments, saved
+  mappings, field fingerprints, or schema. This holds for every adapter and platform hook.
+- Logging goes through one function (`logFailure`) that records the operation and the
+  error type only; a test checks that no other production code logs.
 - The scanner collects field metadata only, never page values.
 - Saved mappings contain only the mapping key parts (field type and normalized question,
   context, or name), the profile field key, the hostname where it was taught, and
@@ -923,7 +1034,8 @@ single classic script, because MV3 content scripts cannot be ES modules.
 
 - Greenhouse: embedded boards (iframes), company-hosted career pages, the location lookup,
   file uploads, voluntary self-identification questions (never filled, by design), and
-  filling on a real Greenhouse page (only a read-only Analyze was verified)
+  broad verification on real Greenhouse forms (one public posting was filled with fake data,
+  writes blocked, never submitted)
 - Workday multi-page navigation, repeated blocks without record headings, multi-select search fields
   (several pills), replacing an existing search selection, and verification against a real
   Workday application form (it requires sign-in)

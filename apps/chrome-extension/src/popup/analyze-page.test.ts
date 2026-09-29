@@ -225,8 +225,8 @@ describe('analysis mapping and filling', () => {
 
   it('sends approvals (fields and profile field names, no values) to the service worker', async () => {
     const results = [{ fieldId: 'f', status: 'filled', message: 'Filled.' }];
-    const sendMessage = vi.fn<(message: unknown) => Promise<unknown>>(() =>
-      Promise.resolve(ok({ results })),
+    const sendMessage = vi.fn<(message: unknown) => Promise<unknown>>((message) =>
+      Promise.resolve(isRuntimeInfo(message) ? SAME_BUILD : ok({ results })),
     );
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
     const approvals = [
@@ -234,17 +234,60 @@ describe('analysis mapping and filling', () => {
     ];
 
     expect(await fillApprovedFields(3, approvals)).toEqual(results);
-    expect(sendMessage).toHaveBeenCalledExactlyOnceWith({
-      type: MessageType.FillPage,
-      payload: { tabId: 3, approvals },
-    });
+    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
+      { type: MessageType.GetRuntimeInfo },
+      { type: MessageType.FillPage, payload: { tabId: 3, approvals } },
+    ]);
   });
 
   it('returns undefined when filling fails', async () => {
     vi.stubGlobal('chrome', {
-      runtime: { sendMessage: () => Promise.reject(new Error('no service worker')) },
+      runtime: {
+        sendMessage: (message: unknown) =>
+          isRuntimeInfo(message)
+            ? Promise.resolve(SAME_BUILD)
+            : Promise.reject(new Error('no service worker')),
+      },
     });
     expect(await fillApprovedFields(3, [])).toBeUndefined();
+  });
+
+  it('Phase 16: a stale service worker fills nothing (same handshake as Analyze)', async () => {
+    const sendMessage = vi.fn<(message: unknown) => Promise<unknown>>(() =>
+      Promise.resolve(ok({ buildId: 'another-build' })),
+    );
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    const approvals = [{ field: field({ id: 'f', signals: {} }), profileField: 'email' }];
+    expect(await fillApprovedFields(3, approvals)).toBe('extension-updated');
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith({ type: MessageType.GetRuntimeInfo });
+  });
+
+  it('Phase 16: a page the platform adapter cannot read is reported, not mapped', async () => {
+    const runtimeSendMessage = vi.fn<(message: unknown) => Promise<unknown>>(() =>
+      Promise.resolve(SAME_BUILD),
+    );
+    vi.stubGlobal('chrome', {
+      tabs: {
+        query: () => Promise.resolve([{ id: 1, url: 'https://example.com' }]),
+        sendMessage: (_tabId: number, message: { type: string }) =>
+          Promise.resolve(
+            message.type === MessageType.Ping
+              ? ok({ ready: true })
+              : ok({
+                  title: '',
+                  platform: 'workday',
+                  fields: [],
+                  unsupported: true,
+                  profileStatus: null,
+                }),
+          ),
+      },
+      scripting: { executeScript: () => Promise.resolve([]) },
+      runtime: { sendMessage: runtimeSendMessage },
+    });
+    expect(await analyzeActiveTab()).toEqual({ ok: false, reason: 'unreadable-page' });
+    expect(runtimeSendMessage).toHaveBeenCalledOnce(); // the handshake only; no MapFields
+    expect(FAILURE_MESSAGES['unreadable-page']).not.toMatch(/workday|adapter|scan|selector/i);
   });
 });
 

@@ -83,7 +83,8 @@ export function isFillInstruction(value: unknown): value is FillInstruction {
     (expected.record === undefined || isFieldRecord(expected.record)) &&
     (expected.repeatedCount === undefined ||
       (Number.isInteger(expected.repeatedCount) && (expected.repeatedCount as number) > 1)) &&
-    (expected.identity === undefined || isFieldIdentity(expected.identity))
+    // Fingerprints never go to the page (the service worker checks them).
+    !('identity' in expected)
   );
 }
 

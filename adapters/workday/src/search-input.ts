@@ -50,7 +50,7 @@ export async function fillSearchInput(
   value: FillValue,
   timing: CustomControlTiming = DEFAULT_SEARCH_TIMING,
 ): Promise<Outcome> {
-  if (element.tagName !== 'INPUT') return unsupported('This search field is not a text input.');
+  if (element.tagName !== 'INPUT') return unsupported('This search field is not supported.');
   if (typeof value === 'boolean') return unsupported('A yes/no value cannot be searched for.');
   const input = element as HTMLInputElement;
   if (input.value.trim() !== '' || selectedItems(input).length > 0) return skipped(EXISTING_VALUE);

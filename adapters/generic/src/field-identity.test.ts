@@ -142,10 +142,10 @@ describe('field identity', () => {
   });
 });
 
-describe('filling checks the identity', () => {
+describe('filling (Phase 16: identity is checked by the service worker, never sent)', () => {
   const instruction = (name: string, value: string): FillInstruction => {
     const found = fields().find((f) => f.signals.name === name);
-    if (!found?.identity) throw new Error('no field');
+    if (!found) throw new Error('no field');
     return {
       fieldId: found.id,
       value,
@@ -153,27 +153,25 @@ describe('filling checks the identity', () => {
         type: found.type,
         name,
         label: found.signals.label,
-        identity: found.identity,
         ...(found.repeatedCount ? { repeatedCount: found.repeatedCount } : {}),
       },
     };
   };
 
-  it('fills the field with the expected identity', async () => {
+  it('fills the field it was approved for', async () => {
     document.body.innerHTML = `<form>${input('name="degree_undergrad"')}${input('name="degree_postgrad"')}</form>`;
     const [result] = await fillFields(document, [instruction('degree_postgrad', 'MSc')]);
     expect(result).toMatchObject({ status: 'filled' });
   });
 
-  it('refuses when the field at that id now has a different identity', async () => {
-    document.body.innerHTML = `<form><fieldset><legend>Undergraduate</legend>${input('name="degree"')}</fieldset></form>`;
+  it('refuses when the question at that id changed since Analyze', async () => {
+    document.body.innerHTML = `<form>${input('name="degree"')}</form>`;
     const approved = instruction('degree', 'BSc');
-    const legend = document.querySelector('legend');
-    if (legend) legend.textContent = 'Postgraduate';
+    document.body.innerHTML = `<form>${input('name="degree"', 'Company')}</form>`;
     const [result] = await fillFields(document, [approved]);
     expect(result).toMatchObject({
       status: 'skipped',
-      message: 'This field is not the one that was assigned. Analyze again.',
+      message: 'The question on the page changed. Analyze the page again.',
     });
     expect((document.querySelector('input') as HTMLInputElement).value).toBe('');
   });

@@ -11,7 +11,7 @@ import {
 } from '../storage/profile-repository';
 import { createRecordAssignmentRepository } from '../storage/record-assignment-repository';
 import { createSavedMappingRepository } from '../storage/saved-mapping-repository';
-import { createServiceWorkerMessageHandler, type FillInTab } from './message-handler';
+import { createServiceWorkerMessageHandler, type FillInTab, type ScanTab } from './message-handler';
 
 const ORIGIN = 'chrome-extension://abcdefghijklmnop/';
 const EXTENSION_PAGE = { url: `${ORIGIN}popup.html` };
@@ -68,7 +68,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function setup(saved?: Profile, fillInTab: FillInTab = recordingFillInTab().fillInTab) {
+/**
+ * Stands in for the re-scan before filling: by default the page still shows exactly the
+ * approved fields; a test can pass its own scan to change the page between Analyze and Fill.
+ */
+async function setup(
+  saved?: Profile,
+  fillInTab: FillInTab = recordingFillInTab().fillInTab,
+  scanTab?: ScanTab,
+) {
+  let approvedFields: FormField[] = [];
   const store = createIndexedDbStore<ExtensionStorageSchema>({
     databaseName: 'service-worker-test',
     factory: new IDBFactory(),
@@ -76,13 +85,20 @@ async function setup(saved?: Profile, fillInTab: FillInTab = recordingFillInTab(
   if (saved) await store.set('profile', saved);
   const writes = vi.spyOn(store, 'set');
   const removals = vi.spyOn(store, 'remove');
-  const handle = createServiceWorkerMessageHandler({
+  const handler = createServiceWorkerMessageHandler({
     repository: createProfileRepository(store),
     mappings: createSavedMappingRepository(store),
     assignments: createRecordAssignmentRepository(store),
     extensionOrigin: ORIGIN,
     fillInTab,
+    scanTab: scanTab ?? (() => Promise.resolve(approvedFields)),
   });
+  const handle = (message: unknown, sender: { url?: string }) => {
+    const payload = (message as { payload?: { approvals?: { field: FormField }[] } } | null)
+      ?.payload;
+    if (Array.isArray(payload?.approvals)) approvedFields = payload.approvals.map((a) => a.field);
+    return handler(message, sender);
+  };
   return { handle, writes, removals, store };
 }
 
@@ -177,6 +193,7 @@ describe('failures and side effects', () => {
       ),
       extensionOrigin: ORIGIN,
       fillInTab: recordingFillInTab().fillInTab,
+      scanTab: () => Promise.resolve([]),
     });
 
     expect(await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE)).toEqual({
@@ -337,7 +354,7 @@ describe('FillPage', () => {
       expect.objectContaining({
         fieldId: 'id:email',
         status: 'failed',
-        message: 'Invalid mapping.',
+        message: 'This field can no longer be filled from your profile. Analyze the page again.',
       }),
       expect.objectContaining({ fieldId: 'name:relocate', status: 'unsupported' }),
       expect.objectContaining({ fieldId: 'name:phone', status: 'filled' }),
@@ -1324,7 +1341,6 @@ describe('Phase 13: explicit record assignment', () => {
           htmlId: 'd1',
           label: 'Degree',
           repeatedCount: 2,
-          identity: identityOf('id:d1'),
         },
       },
       {
@@ -1335,7 +1351,6 @@ describe('Phase 13: explicit record assignment', () => {
           htmlId: 'd2',
           label: 'Degree',
           repeatedCount: 2,
-          identity: identityOf('id:d2'),
         },
       },
       {
@@ -1596,12 +1611,12 @@ describe('Phase 14: stable field identity and assignment management', () => {
       { field: pgFirst, profileField: `education@${B}.degree` },
       { field: ugSecond, profileField: `education@${A}.degree` },
     ]);
-    expect(
-      calls[0]?.instructions.map((i) => [i.fieldId, i.value, i.expected.identity?.key]),
-    ).toEqual([
-      ['name:degree', 'Degree B', KEY_PG],
-      ['name:degree~2', 'Degree A', KEY_UG],
+    expect(calls[0]?.instructions.map((i) => [i.fieldId, i.value])).toEqual([
+      ['name:degree', 'Degree B'],
+      ['name:degree~2', 'Degree A'],
     ]);
+    // Phase 16: fingerprints are checked here, never sent to the page.
+    expect(JSON.stringify(calls)).not.toMatch(/fp-[0-9a-f]{16}/);
   });
 
   it('two current fields with the same saved identity get neither (duplicate identity)', async () => {
@@ -1645,7 +1660,7 @@ describe('Phase 14: stable field identity and assignment management', () => {
     expect(await store.get('recordAssignments')).toBeUndefined();
     // A later analysis has no assignment for it.
     expect((await map(handle, [c1, c2]))[0]?.status).toBe('unsupported');
-    // The approval carries it; the service worker re-checks it, and the page checks identity.
+    // The approval carries it; the service worker re-checks it and the field's identity.
     const results = await fill(handle, [
       { field: c1, profileField: `education@${A}.degree`, transient: true },
       { field: c2, profileField: `education@${B}.degree` },
@@ -1653,8 +1668,8 @@ describe('Phase 14: stable field identity and assignment management', () => {
     expect(results).toMatchObject({
       data: { results: [{ status: 'filled' }, { status: 'failed' }] },
     });
-    expect(calls[0]?.instructions.map((i) => [i.fieldId, i.value, i.expected.identity])).toEqual([
-      ['index:1', 'Degree A', { key: KEY, unique: false }],
+    expect(calls[0]?.instructions.map((i) => [i.fieldId, i.value, i.expected])).toEqual([
+      ['index:1', 'Degree A', { type: 'text', name: '', label: 'Degree', repeatedCount: 2 }],
     ]);
   });
 
@@ -1850,5 +1865,249 @@ describe('Phase 14: generated ids across re-renders', () => {
       EXTENSION_PAGE,
     );
     expect(other).toMatchObject({ data: { mappings: [{ status: 'unsupported' }] } });
+  });
+});
+
+describe('Phase 16: stale approvals are refused before anything reaches the page', () => {
+  const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const PAGE = 'https://jobs.example.com/apply';
+  const profile16: Profile = {
+    ...sampleProfile,
+    schemaVersion: 4,
+    education: [
+      { id: A, institution: 'University A', degree: 'Degree A' },
+      { id: B, institution: 'University B', degree: 'Degree B' },
+    ],
+  };
+  const withIdentity = (f: FormField, key: string, unique = true): FormField => ({
+    ...f,
+    identity: { key, unique },
+  });
+  const first = withIdentity(FIELDS.firstName, 'fp-0000000000000f01');
+  const email = withIdentity(FIELDS.email, 'fp-0000000000000e01');
+  const degree = (id: string, key: string): FormField => ({
+    ...field(id, 'text', { htmlId: id.slice(3), label: 'Degree' }),
+    repeatedCount: 2,
+    identity: { key, unique: true },
+  });
+  const [d1, d2] = [degree('id:d1', 'fp-00000000000000d1'), degree('id:d2', 'fp-00000000000000d2')];
+  type Approval = { field: FormField; profileField: string };
+  const fillPage = async (
+    handle: Awaited<ReturnType<typeof setup>>['handle'],
+    approvals: Approval[],
+  ) => {
+    const response = await handle(
+      { type: MessageType.FillPage, payload: { tabId: 3, approvals, page: PAGE } },
+      EXTENSION_PAGE,
+    );
+    return (response as { data: { results: { fieldId: string; status: string }[] } }).data.results;
+  };
+  const statuses = (results: { status: string }[]) => results.map((r) => r.status);
+
+  it('A valid, B stale, C valid: A and C are sent and filled, B is refused (failure isolation)', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const phone = withIdentity(FIELDS.phone, 'fp-00000000000000a3');
+    const changed = withIdentity(FIELDS.email, 'fp-0000000000000e99');
+    const { handle } = await setup(profile16, fillInTab, () =>
+      Promise.resolve([first, changed, phone]),
+    );
+    const results = await fillPage(handle, [
+      { field: first, profileField: 'first_name' },
+      { field: email, profileField: 'email' },
+      { field: phone, profileField: 'phone' },
+    ]);
+    expect(statuses(results)).toEqual(['filled', 'skipped', 'filled']);
+    expect(results[1]).toMatchObject({
+      message: 'This field changed since Analyze. Analyze the page again.',
+    });
+    expect(calls[0]?.instructions.map((i) => i.fieldId)).toEqual(['id:first', 'name:phone']);
+  });
+
+  it.each<[string, (fields: FormField[]) => FormField[], string]>([
+    ['removed', (fields) => fields.filter((f) => f.id !== 'id:email'), 'not-found'],
+    [
+      'replaced by a field with a different question (label changed)',
+      (fields) =>
+        fields.map((f) =>
+          f.id === 'id:email'
+            ? withIdentity(
+                { ...f, signals: { ...f.signals, label: 'Work email' } },
+                'fp-00000000000000e2',
+              )
+            : f,
+        ),
+      'skipped',
+    ],
+    [
+      'now appearing twice (no longer unique)',
+      (fields) =>
+        fields.map((f) =>
+          f.id === 'id:email' ? withIdentity(f, 'fp-0000000000000e01', false) : f,
+        ),
+      'skipped',
+    ],
+  ])('a field %s since Analyze is refused', async (_, mutate, status) => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile16, fillInTab, () =>
+      Promise.resolve(mutate([first, email])),
+    );
+    const results = await fillPage(handle, [
+      { field: first, profileField: 'first_name' },
+      { field: email, profileField: 'email' },
+    ]);
+    expect(statuses(results)).toEqual(['filled', status]);
+    expect(calls[0]?.instructions.map((i) => i.fieldId)).toEqual(['id:first']);
+  });
+
+  it('a page the adapter can no longer read, or that does not answer, gets nothing', async () => {
+    for (const [scan, status] of [
+      ['unreadable', 'unsupported'],
+      [undefined, 'failed'],
+    ] as const) {
+      const { calls, fillInTab } = recordingFillInTab();
+      const { handle } = await setup(profile16, fillInTab, () => Promise.resolve(scan));
+      const results = await fillPage(handle, [{ field: first, profileField: 'first_name' }]);
+      expect(statuses(results)).toEqual([status]);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it('profile edited between Analyze and Fill: the current value is sent, never a cached one', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle, store } = await setup(profile16, fillInTab);
+    await store.set('profile', { ...profile16, identity: { firstName: 'Janet', lastName: 'Doe' } });
+    await fillPage(handle, [{ field: first, profileField: 'first_name' }]);
+    expect(calls[0]?.instructions.map((i) => i.value)).toEqual(['Janet']);
+    // A value removed from the profile is skipped, not filled from memory.
+    await store.set('profile', { ...profile16, identity: { lastName: 'Doe' } });
+    expect(
+      statuses(await fillPage(handle, [{ field: first, profileField: 'first_name' }])),
+    ).toEqual(['skipped']);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('a taught mapping deleted or changed after Analyze no longer fills', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile16, fillInTab);
+    const preferred = withIdentity(
+      field('id:pref', 'text', { htmlId: 'pref', label: 'What name should we use?' }),
+      'fp-0000000000000a0b',
+    );
+    const teach = (profileField: string) =>
+      handle(
+        { type: MessageType.SaveMapping, payload: { field: preferred, profileField } },
+        EXTENSION_PAGE,
+      );
+    await teach('first_name');
+    // Changed to another profile field: the approval for first_name is stale.
+    await teach('last_name');
+    expect(
+      statuses(await fillPage(handle, [{ field: preferred, profileField: 'first_name' }])),
+    ).toEqual(['failed']);
+    // Deleted: the field is unknown again.
+    await handle({ type: MessageType.ClearMappings }, EXTENSION_PAGE);
+    expect(
+      statuses(await fillPage(handle, [{ field: preferred, profileField: 'last_name' }])),
+    ).toEqual(['failed']);
+    expect(calls).toEqual([]);
+  });
+
+  it('an assignment deleted, changed, or whose record was deleted after Analyze is refused', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle, store } = await setup(profile16, fillInTab);
+    const assign = (f: FormField, target: string) =>
+      handle(
+        { type: MessageType.SaveAssignment, payload: { page: PAGE, field: f, target } },
+        EXTENSION_PAGE,
+      );
+    await assign(d1, `education@${A}.degree`);
+    await assign(d2, `education@${B}.degree`);
+    // Changed: d1 now points at record B; the approval for A is refused (no silent switch).
+    await assign(d1, `education@${B}.degree`);
+    expect(
+      statuses(await fillPage(handle, [{ field: d1, profileField: `education@${A}.degree` }])),
+    ).toEqual(['failed']);
+    // Deleted.
+    await handle(
+      { type: MessageType.DeleteAssignment, payload: { page: PAGE, field: d1 } },
+      EXTENSION_PAGE,
+    );
+    expect(
+      statuses(await fillPage(handle, [{ field: d1, profileField: `education@${B}.degree` }])),
+    ).toEqual(['failed']);
+    // Record deleted from the profile.
+    await store.set('profile', { ...profile16, education: profile16.education.slice(0, 1) });
+    expect(
+      statuses(await fillPage(handle, [{ field: d2, profileField: `education@${B}.degree` }])),
+    ).toEqual(['failed']);
+    expect(calls).toEqual([]);
+  });
+
+  it('nothing sent to the page carries a fingerprint, record id, or unapproved value', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(profile16, fillInTab);
+    await handle(
+      {
+        type: MessageType.SaveAssignment,
+        payload: { page: PAGE, field: d1, target: `education@${A}.degree` },
+      },
+      EXTENSION_PAGE,
+    );
+    await fillPage(handle, [
+      { field: first, profileField: 'first_name' },
+      { field: d1, profileField: `education@${A}.degree` },
+    ]);
+    const sent = JSON.stringify(calls);
+    expect(calls[0]?.instructions.map((i) => i.value)).toEqual(['Jane', 'Degree A']);
+    expect(sent).not.toMatch(/fp-[0-9a-f]{16}|[0-9a-f]{8}-[0-9a-f]{4}-|education@|identity/);
+    for (const value of ['Doe', 'jane.doe@example.com', 'University', 'Degree B']) {
+      expect(sent).not.toContain(value);
+    }
+  });
+});
+
+describe('Phase 16: privacy boundary for content scripts', () => {
+  it('a content script (web page sender) may only ask for the profile status', async () => {
+    const { handle } = await setup(sampleProfile);
+    const probe = field('id:x', 'text', { label: 'X' });
+    const page = 'https://jobs.example.com/apply';
+    const messages = [
+      { type: MessageType.GetProfile },
+      { type: MessageType.MapFields, payload: { fields: [probe], page } },
+      { type: MessageType.FillPage, payload: { tabId: 1, approvals: [], page } },
+      { type: MessageType.SaveMapping, payload: { field: probe, profileField: 'city' } },
+      { type: MessageType.ListMappings },
+      { type: MessageType.DeleteMapping, payload: { key: 'v1|text|q=x|c=|i=' } },
+      { type: MessageType.ClearMappings },
+      { type: MessageType.GetRuntimeInfo },
+      { type: MessageType.SaveAssignment, payload: { page, field: probe, target: 'city' } },
+      { type: MessageType.DeleteAssignment, payload: { page, field: probe } },
+      { type: MessageType.GetRecordChoices },
+      { type: MessageType.ListAssignments },
+      {
+        type: MessageType.RemoveAssignment,
+        payload: { handle: { page, fieldId: 'id:x' } },
+      },
+      { type: MessageType.ClearAssignments },
+    ];
+    // Every service-worker message type is covered here.
+    const covered = new Set(messages.map((m) => m.type));
+    const workerTypes = Object.values(MessageType).filter(
+      (t) =>
+        ![
+          MessageType.Ping,
+          MessageType.ScanPage,
+          MessageType.FillFields,
+          MessageType.GetProfileStatus,
+        ].includes(t as never),
+    );
+    expect(workerTypes.every((t) => covered.has(t as never))).toBe(true);
+    for (const message of messages) {
+      const response = await handle(message, WEB_PAGE);
+      expect(response, message.type).toEqual({ ok: false, error: 'forbidden' });
+    }
+    const status = await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE);
+    expect(JSON.stringify(status)).not.toMatch(/Jane|Doe|jane\.doe|Springfield/);
   });
 });

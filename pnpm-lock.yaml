@@ -189,6 +189,9 @@ importers:
       fake-indexeddb:
         specifier: 'catalog:'
         version: 6.2.5
+      happy-dom:
+        specifier: 'catalog:'
+        version: 20.14.5
       typescript:
         specifier: 'catalog:'
         version: 6.0.3

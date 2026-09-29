@@ -1,5 +1,10 @@
 import type { FormField } from '@applyonce/core';
-import { scanControls, type ScannedField, type ScanOptions } from '@applyonce/adapter-generic';
+import {
+  scanControls,
+  singleScope,
+  type ScannedField,
+  type ScanOptions,
+} from '@applyonce/adapter-generic';
 import {
   APPLICATION_SCOPE,
   AUTOMATION_ID,
@@ -14,8 +19,9 @@ const TEXT_LIKE = new Set(['text', 'email', 'tel', 'number', 'textarea']);
 /**
  * Workday scan: the generic scanner, scoped and adjusted with Workday rules.
  *
- * 1. Scope: the application step container when present, else the page, never the site
- *    chrome (header, navigation, footer).
+ * 1. Scope: the rendered application step container when present, else the page, never the
+ *    site chrome (header, navigation, footer). Several rendered step containers cannot be
+ *    scoped safely: the scan throws PlatformScanError (reported as an unsupported page).
  * 2. Identity: a control's data-automation-id, instead of generated element ids that can
  *    change when Workday re-renders a step. For such controls the generated id is dropped
  *    from the field's signals, so it is neither matched on nor checked when filling.
@@ -28,7 +34,7 @@ const TEXT_LIKE = new Set(['text', 'email', 'tel', 'number', 'textarea']);
  *    are handled by the generic scanner (shared with generic pages).
  */
 export function scanWorkday(root: ParentNode): ScannedField[] {
-  const scope = root.querySelector(byAutomationId(APPLICATION_SCOPE)) ?? root;
+  const scope = singleScope(root, byAutomationId(APPLICATION_SCOPE)) ?? root;
   return scanControls(scope, WORKDAY_SCAN_OPTIONS);
 }
 

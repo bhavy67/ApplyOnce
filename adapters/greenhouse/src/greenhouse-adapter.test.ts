@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import {
-  selectAdapter,
+  resolvePlatform,
   type FillInstruction,
   type FillValue,
   type FormField,
@@ -134,6 +134,7 @@ describe('detection', () => {
     page(text('question_123456', 'LinkedIn Profile'));
     expect(detectGreenhouse({ url: 'https://careers.example.com/apply', root: document })).toEqual({
       platform: 'greenhouse',
+      strength: 'structure',
       evidence: ['Greenhouse application form'],
     });
   });
@@ -168,20 +169,21 @@ describe('detection', () => {
   it('resolves Workday, Greenhouse, and generic without interfering', () => {
     page(text('question_1', 'LinkedIn Profile'));
     expect(
-      selectAdapter([greenhouseAdapter], genericAdapter, { url: JOB_URL, root: document }).id,
+      resolvePlatform([greenhouseAdapter], genericAdapter, { url: JOB_URL, root: document }).adapter
+        .id,
     ).toBe('greenhouse');
     expect(
-      selectAdapter([greenhouseAdapter], genericAdapter, {
+      resolvePlatform([greenhouseAdapter], genericAdapter, {
         url: 'https://example.com',
         root: document,
-      }).id,
+      }).adapter.id,
     ).toBe('greenhouse');
     document.body.innerHTML = '<form><input id="x"></form>';
     expect(
-      selectAdapter([greenhouseAdapter], genericAdapter, {
+      resolvePlatform([greenhouseAdapter], genericAdapter, {
         url: 'https://example.com',
         root: document,
-      }).id,
+      }).adapter.id,
     ).toBe('generic');
   });
 });

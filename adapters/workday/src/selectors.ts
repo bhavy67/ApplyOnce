@@ -8,8 +8,12 @@
  * stable identities, never as meaning.
  */
 
-/** Hosts serving Workday candidate sites. Tenants may also use their own domains. */
-export const WORKDAY_HOST_SUFFIXES = ['.myworkdayjobs.com', '.myworkdaysite.com', '.myworkday.com'];
+/**
+ * Domains whose subdomains serve Workday candidate sites (e.g. "acme.wd5.myworkdayjobs.com").
+ * Only proper subdomains match. Tenants may also use their own domains (detected by page
+ * structure instead).
+ */
+export const WORKDAY_HOST_DOMAINS = ['myworkdayjobs.com', 'myworkdaysite.com', 'myworkday.com'];
 
 /** Workday's stable automation attribute (present on containers, links, and inputs). */
 export const AUTOMATION_ID = 'data-automation-id';

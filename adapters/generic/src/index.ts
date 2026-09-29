@@ -26,3 +26,11 @@ export {
 export { isGeneratedId, markFieldIdentity } from './field-identity';
 export { genericAdapter } from './generic-adapter';
 export { scanControls, scanFields, type ScannedField, type ScanOptions } from './scan-fields';
+export {
+  isOneOfHosts,
+  isSubdomainOf,
+  pageHostname,
+  PlatformScanError,
+  singleScope,
+  visibleElements,
+} from './platform-evidence';
