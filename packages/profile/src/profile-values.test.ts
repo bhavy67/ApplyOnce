@@ -7,11 +7,12 @@ import {
   type ProfileTarget,
 } from '@applyonce/core';
 import { describe, expect, it } from 'vitest';
+// Internal reader (not exported from the package since Phase 17).
+import { readProfilePath } from './profile-values';
 import {
   createEmptyProfile,
   getProfileValue,
   isProfileFieldKey,
-  readProfilePath,
   addRecord,
   canAddRecord,
   isBlankRecord,

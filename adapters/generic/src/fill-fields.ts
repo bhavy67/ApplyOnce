@@ -23,6 +23,7 @@ import {
   type Outcome,
 } from './fill-outcome';
 import { findMatchingOption } from './option-match';
+import { isGeneratedId } from './field-identity';
 import { guardPage, PAGE_ACTION_BLOCKED } from './page-guard';
 import { scanControls, type FormControl, type ScannedField } from './scan-fields';
 
@@ -63,8 +64,10 @@ export type CustomFiller = (
  * Fills approved fields one at a time and resolves to one result per instruction, in
  * order.
  *
- * The page is scanned again first and each field is located by its deterministic id in
- * the current DOM, then checked against the metadata recorded at analysis time. So a
+ * The page is scanned again right before each field (Phase 17; earlier fields' dropdowns can
+ * take seconds), and the field is located by its deterministic id in the current DOM, then
+ * checked against the metadata recorded at analysis time, with nothing awaited between the
+ * checks and the first interaction. So a
  * re-rendered field is still found, while a removed or different field is reported as
  * not found. A failure in one field never stops the others. Never submits anything: while
  * filling, the page guard cancels any submission or navigation, and the field being filled
@@ -82,30 +85,39 @@ export async function fillFields(
     fillCustom,
   }: FillOptions = {},
 ): Promise<FillResult[]> {
-  let scanned: ScannedField[];
-  try {
-    scanned = scan(root);
-  } catch {
+  const scanNow = (): Map<string, ScannedField> | undefined => {
+    try {
+      return new Map(scan(root).map((entry) => [entry.field.id, entry]));
+    } catch {
+      return undefined;
+    }
+  };
+  const initial = scanNow();
+  if (!initial) {
     return instructions.map(({ fieldId }) => ({ fieldId, ...unsupported(UNREADABLE_PAGE) }));
   }
-  const current = new Map(scanned.map((entry) => [entry.field.id, entry]));
   const results: FillResult[] = [];
   const guard = guardPage(root);
   try {
     // Sequential: custom dropdowns open popups, which must not overlap.
     for (const instruction of instructions) {
       guard.reset();
+      // Phase 17: scanned again right before each field, so every check below sees the page
+      // as it is now, not as it was before earlier fields (whose dropdowns can take seconds).
+      const current = scanNow();
       let outcome: Outcome;
       try {
-        outcome = normalizeOutcome(
-          await fillOne(
-            current.get(instruction.fieldId),
-            instruction,
-            customControlTiming,
-            fillCustom,
-          ),
-          instruction.value,
-        );
+        outcome = current
+          ? normalizeOutcome(
+              await fillOne(
+                locate(instruction.fieldId, current, initial),
+                instruction,
+                customControlTiming,
+                fillCustom,
+              ),
+              instruction.value,
+            )
+          : unsupported(UNREADABLE_PAGE);
       } catch {
         outcome = failed(SOMETHING_WENT_WRONG);
       }
@@ -116,6 +128,37 @@ export async function fillFields(
     guard.release();
   }
   return results;
+}
+
+/**
+ * The field as it is now. Normally found by its id in the fresh scan. Frameworks that
+ * generate element ids (e.g. Vue's "v-12", React's "_r_3_") can change a field's id on every
+ * render, including renders caused by filling an earlier field, and may even replace the
+ * element. Then the field is found again only if its id at the start of this fill was a
+ * generated one and exactly one current field has the same unique identity (which ignores
+ * generated ids: same question, section, form, name, type…). All other checks then run on
+ * that current field's metadata. Anything else is "not found".
+ */
+function locate(
+  fieldId: string,
+  current: Map<string, ScannedField>,
+  initial: Map<string, ScannedField>,
+): ScannedField | undefined {
+  const found = current.get(fieldId);
+  if (found) return found;
+  const earlier = initial.get(fieldId);
+  const { htmlId } = earlier?.field.signals ?? {};
+  const identity = earlier?.field.identity;
+  if (!earlier || !htmlId || !isGeneratedId(htmlId) || identity?.unique !== true) return undefined;
+  const same = [...current.values()].filter(
+    (entry) => entry.field.identity?.key === identity.key && entry.field.identity.unique,
+  );
+  const [match] = same;
+  if (same.length !== 1 || !match) return undefined;
+  return {
+    ...match,
+    field: { ...match.field, id: fieldId, signals: { ...match.field.signals, htmlId } },
+  };
 }
 
 const SOMETHING_WENT_WRONG = 'Something went wrong while filling this field.';
@@ -178,7 +221,9 @@ async function fillOne(
   if (field.disabled) return skipped('The field is disabled now.');
   if (field.readOnly) return skipped('The field is read-only.');
   const [control] = controls;
-  if (!control) return { status: 'not-found', message: 'The field is no longer on the page.' };
+  if (!control?.isConnected) {
+    return { status: 'not-found', message: 'The field is no longer on the page.' };
+  }
 
   if (field.custom) {
     // Never operate a control that is itself a navigation or submit action, whichever

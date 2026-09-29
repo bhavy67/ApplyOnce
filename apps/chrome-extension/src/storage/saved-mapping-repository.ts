@@ -1,4 +1,6 @@
 import {
+  isFieldType,
+  isRecordIdTarget,
   resolveProfileTarget,
   type LocalStore,
   type MappingKeyParts,
@@ -42,6 +44,51 @@ export interface SavedMappingRepository {
   clear(): Promise<void>;
 }
 
+/** Stored saved mappings of a known version whose content is malformed; refused, never repaired. */
+export class CorruptedSavedMappingsError extends Error {
+  constructor() {
+    super('Saved mappings are corrupted');
+    this.name = 'CorruptedSavedMappingsError';
+  }
+}
+
+const isText = (value: unknown, max = 10_000) => typeof value === 'string' && value.length <= max;
+const isOptionalText = (value: unknown) => value === undefined || isText(value);
+
+/**
+ * One stored mapping exactly as this repository writes it: only known keys, key parts of a
+ * real field type, a key that matches its parts, a short target that is never a record id,
+ * and timestamps. Anything else means the store was changed outside ApplyOnce.
+ */
+export function isStoredSavedMapping(value: unknown): value is SavedMapping {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const keys = ['key', 'parts', 'profileField', 'site', 'createdAt', 'updatedAt'];
+  if (!Object.keys(entry).every((k) => keys.includes(k))) return false;
+  const parts = entry.parts as Record<string, unknown> | null;
+  if (typeof parts !== 'object' || parts === null || Array.isArray(parts)) return false;
+  if (
+    !Object.keys(parts).every((k) => ['fieldType', 'question', 'context', 'identifier'].includes(k))
+  )
+    return false;
+  return (
+    typeof parts.fieldType === 'string' &&
+    isFieldType(parts.fieldType) &&
+    isOptionalText(parts.question) &&
+    isOptionalText(parts.context) &&
+    isOptionalText(parts.identifier) &&
+    entry.key === mappingKeyFromParts(parts as unknown as MappingKeyParts) &&
+    // A target this version does not know (e.g. after a downgrade) is kept and listed, so it
+    // can be deleted; it is never used for filling (only canonical targets resolve).
+    isText(entry.profileField, 200) &&
+    !isRecordIdTarget(entry.profileField) &&
+    (entry.site === undefined ||
+      (isText(entry.site, 253) && /^[a-z0-9.-]+$/i.test(entry.site as string))) &&
+    isText(entry.createdAt, 64) &&
+    isText(entry.updatedAt, 64)
+  );
+}
+
 export class UnsupportedSavedMappingsVersionError extends Error {
   constructor(readonly storedVersion: unknown) {
     super(`Saved mappings have unsupported version ${String(storedVersion)}`);
@@ -65,10 +112,22 @@ export function createSavedMappingRepository(
   async function read(): Promise<SavedMapping[]> {
     const record = await store.get('savedMappings');
     if (record === undefined) return [];
-    if (record.version !== SAVED_MAPPINGS_VERSION) {
-      throw new UnsupportedSavedMappingsVersionError(record.version);
+    if ((record as { version?: unknown } | null)?.version !== SAVED_MAPPINGS_VERSION) {
+      throw new UnsupportedSavedMappingsVersionError(
+        (record as { version?: unknown } | null)?.version,
+      );
     }
-    return record.mappings;
+    // Every entry is checked; one malformed entry refuses the whole record (fail closed:
+    // nothing is guessed, dropped, or overwritten by the next write).
+    const { mappings } = record as { mappings: unknown };
+    if (
+      !Array.isArray(mappings) ||
+      !mappings.every(isStoredSavedMapping) ||
+      new Set(mappings.map((m) => m.key)).size !== mappings.length
+    ) {
+      throw new CorruptedSavedMappingsError();
+    }
+    return mappings;
   }
 
   function write(mappings: SavedMapping[]) {

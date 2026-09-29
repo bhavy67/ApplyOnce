@@ -9,13 +9,17 @@ import type {
   SavedMapping,
 } from '@applyonce/core';
 import type { Profile } from '@applyonce/profile';
+import { isRecordIdTarget } from '@applyonce/core';
 import {
+  hasOnlyKeys,
   isBoundedArray,
+  isBoundedText,
   isFillInstruction,
   isFormField,
   isHostname,
   isMappingKey,
   isPageKey,
+  isProfileTargetText,
   isRecord,
 } from './validate';
 
@@ -24,7 +28,8 @@ import {
  * extension; nothing here talks to external services.
  *
  *   popup ──Ping/ScanPage──► content script              (tabs.sendMessage)
- *   content script ──GetProfileStatus──► service worker  (runtime.sendMessage)
+ *   popup ──GetProfileStatus──► service worker            (content scripts are refused
+ *                                                          every service worker message)
  *   popup ──MapFields/FillPage──► service worker
  *   service worker ──FillFields──► content script        (approved values only)
  *   extension pages ──GetProfile──► service worker
@@ -87,8 +92,11 @@ export interface PageScan {
    * and nothing can be filled until the page changes.
    */
   unsupported?: true;
-  /** Null when the profile could not be read. */
-  profileStatus: ProfileStatus | null;
+  /**
+   * Added by the popup (the content script never asks the service worker for anything).
+   * Null when the profile could not be read.
+   */
+  profileStatus?: ProfileStatus | null;
 }
 
 /** A mapping as shown for review: whether the profile has a value, never the value. */
@@ -230,41 +238,61 @@ export const fail = (error: MessageError): { ok: false; error: MessageError } =>
 });
 
 /** Payload validators; types without a payload need none. */
+const isApproval = (a: unknown) =>
+  isRecord(a) &&
+  hasOnlyKeys(a, ['field', 'profileField', 'transient']) &&
+  isFormField(a.field) &&
+  isProfileTargetText(a.profileField) &&
+  (a.transient === undefined || typeof a.transient === 'boolean');
+
+/**
+ * Payload validators; types without a payload need none (and must not carry one). Every
+ * payload may hold only its own keys, and every profile target must be canonical: nothing
+ * here trusts the sender's shapes, ids, targets, or pages.
+ */
 const PAYLOAD_VALIDATORS: Partial<Record<MessageType, (payload: unknown) => boolean>> = {
   [MessageType.MapFields]: (p) =>
     isRecord(p) &&
+    hasOnlyKeys(p, ['fields', 'page']) &&
     isBoundedArray(p.fields) &&
     p.fields.every(isFormField) &&
     (p.page === undefined || isPageKey(p.page)),
   [MessageType.FillPage]: (p) =>
     isRecord(p) &&
-    Number.isInteger(p.tabId) &&
+    hasOnlyKeys(p, ['tabId', 'approvals', 'page']) &&
+    Number.isSafeInteger(p.tabId) &&
+    (p.tabId as number) >= 0 &&
     isBoundedArray(p.approvals) &&
-    p.approvals.every(
-      (a) =>
-        isRecord(a) &&
-        isFormField(a.field) &&
-        typeof a.profileField === 'string' &&
-        (a.transient === undefined || typeof a.transient === 'boolean'),
-    ) &&
+    p.approvals.every(isApproval) &&
     (p.page === undefined || isPageKey(p.page)),
   [MessageType.FillFields]: (p) =>
-    isRecord(p) && isBoundedArray(p.instructions) && p.instructions.every(isFillInstruction),
+    isRecord(p) &&
+    hasOnlyKeys(p, ['instructions']) &&
+    isBoundedArray(p.instructions) &&
+    p.instructions.every(isFillInstruction),
   [MessageType.SaveMapping]: (p) =>
     isRecord(p) &&
+    hasOnlyKeys(p, ['field', 'profileField', 'site']) &&
     isFormField(p.field) &&
-    typeof p.profileField === 'string' &&
+    isProfileTargetText(p.profileField) &&
     (p.site === undefined || isHostname(p.site)),
-  [MessageType.DeleteMapping]: (p) => isRecord(p) && isMappingKey(p.key),
+  [MessageType.DeleteMapping]: (p) => isRecord(p) && hasOnlyKeys(p, ['key']) && isMappingKey(p.key),
   [MessageType.SaveAssignment]: (p) =>
-    isRecord(p) && isPageKey(p.page) && isFormField(p.field) && typeof p.target === 'string',
-  [MessageType.DeleteAssignment]: (p) => isRecord(p) && isPageKey(p.page) && isFormField(p.field),
+    isRecord(p) &&
+    hasOnlyKeys(p, ['page', 'field', 'target']) &&
+    isPageKey(p.page) &&
+    isFormField(p.field) &&
+    isRecordIdTarget(p.target) &&
+    isProfileTargetText(p.target),
+  [MessageType.DeleteAssignment]: (p) =>
+    isRecord(p) && hasOnlyKeys(p, ['page', 'field']) && isPageKey(p.page) && isFormField(p.field),
   [MessageType.RemoveAssignment]: (p) =>
     isRecord(p) &&
+    hasOnlyKeys(p, ['handle']) &&
     isRecord(p.handle) &&
+    hasOnlyKeys(p.handle, ['page', 'fieldId', 'identityKey']) &&
     isPageKey(p.handle.page) &&
-    typeof p.handle.fieldId === 'string' &&
-    p.handle.fieldId.length <= 2000 &&
+    isBoundedText(p.handle.fieldId, 2000) &&
     (p.handle.identityKey === undefined ||
       (typeof p.handle.identityKey === 'string' && /^fp-[0-9a-f]{16}$/.test(p.handle.identityKey))),
 };
@@ -277,6 +305,10 @@ export function parseMessage(value: unknown): MessageResult<Message> {
   if (!MESSAGE_TYPES.has(value.type)) return fail('unknown-message');
   const type = value.type as MessageType;
   const validate = PAYLOAD_VALIDATORS[type];
+  // A message is { type } or { type, payload }; a payload where none belongs is refused.
+  if (!hasOnlyKeys(value, validate ? ['type', 'payload'] : ['type'])) {
+    return fail('malformed-message');
+  }
   if (validate && !validate(value.payload)) return fail('malformed-message');
   return ok(value as Message);
 }
@@ -293,7 +325,9 @@ export function isPageScan(value: unknown): value is PageScan {
     typeof value.platform === 'string' &&
     Array.isArray(value.fields) &&
     (value.unsupported === undefined || value.unsupported === true) &&
-    (value.profileStatus === null || isRecord(value.profileStatus))
+    (value.profileStatus === undefined ||
+      value.profileStatus === null ||
+      isRecord(value.profileStatus))
   );
 }
 

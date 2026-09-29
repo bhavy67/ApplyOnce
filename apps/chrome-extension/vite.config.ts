@@ -22,6 +22,8 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: false,
+    // Chrome preloads modules natively; the polyfill would add a fetch() to every page.
+    modulePreload: { polyfill: false },
     rolldownOptions: {
       input: {
         popup: resolve(import.meta.dirname, 'popup.html'),

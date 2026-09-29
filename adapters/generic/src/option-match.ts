@@ -8,6 +8,11 @@ import { compactText, normalizeText } from '@applyonce/field-mapper';
  * stage is whole-text equality, never "contains": "Remote / Hybrid" does not match
  * "remote". The first stage with exactly one match wins; several matches in a stage is
  * ambiguous. No match means nothing is selected.
+ *
+ * Spoofing guard (Phase 17): the winner must also be the only option any other stage
+ * matches. An option whose value says one thing and another option whose visible text
+ * says the same thing (value "Canada" shown as "India", next to an option shown as
+ * "Canada") make the choice ambiguous, so nothing is selected.
  */
 export function findMatchingOption<T>(
   options: readonly T[],
@@ -25,10 +30,15 @@ export function findMatchingOption<T>(
       compacted.includes(compactText(describe(option).value)) ||
       compacted.includes(compactText(describe(option).label)),
   ];
-  for (const stage of stages) {
+  for (const [index, stage] of stages.entries()) {
     const matches = options.filter(stage);
-    if (matches.length === 1) return matches[0];
     if (matches.length > 1) return 'ambiguous';
+    const [winner] = matches;
+    if (winner === undefined) continue;
+    const conflicting = stages
+      .slice(index + 1)
+      .some((later) => options.some((option) => option !== winner && later(option)));
+    return conflicting ? 'ambiguous' : winner;
   }
   return undefined;
 }

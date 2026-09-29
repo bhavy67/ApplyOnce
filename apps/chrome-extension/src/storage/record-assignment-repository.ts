@@ -88,6 +88,49 @@ export class UnsupportedRecordAssignmentsVersionError extends Error {
   }
 }
 
+/** Stored assignments of a known version whose content is malformed; refused, never repaired. */
+export class CorruptedRecordAssignmentsError extends Error {
+  constructor() {
+    super('Record assignments are corrupted');
+    this.name = 'CorruptedRecordAssignmentsError';
+  }
+}
+
+const isText = (value: unknown, max = 10_000) => typeof value === 'string' && value.length <= max;
+
+/**
+ * One stored assignment exactly as this repository writes it: only known keys, a page key
+ * (origin + path, never credentials, query, or fragment), a record-id target with a canonical
+ * field, field metadata only, and an identity key when present.
+ */
+export function isStoredRecordAssignment(value: unknown): value is RecordAssignment {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const keys = ['page', 'fieldId', 'identityKey', 'field', 'target', 'createdAt', 'updatedAt'];
+  if (!Object.keys(entry).every((k) => keys.includes(k))) return false;
+  const field = entry.field as Record<string, unknown> | null;
+  if (typeof field !== 'object' || field === null || Array.isArray(field)) return false;
+  if (
+    !Object.keys(field).every((k) =>
+      ['type', 'name', 'htmlId', 'label', 'repeatedCount'].includes(k),
+    )
+  )
+    return false;
+  return (
+    isPageKey(entry.page) &&
+    isText(entry.fieldId, 2000) &&
+    (entry.identityKey === undefined || isIdentityKey(entry.identityKey)) &&
+    isRecordIdTarget(entry.target) &&
+    typeof field.type === 'string' &&
+    resolveProfileTarget(entry.target)?.fieldTypes.includes(field.type as FieldType) === true &&
+    ['name', 'htmlId', 'label'].every((k) => field[k] === undefined || isText(field[k])) &&
+    Number.isInteger(field.repeatedCount) &&
+    (field.repeatedCount as number) >= 1 &&
+    isText(entry.createdAt, 64) &&
+    isText(entry.updatedAt, 64)
+  );
+}
+
 export function isIdentityKey(value: unknown): value is string {
   return typeof value === 'string' && /^fp-[0-9a-f]{16}$/.test(value);
 }
@@ -147,10 +190,20 @@ export function createRecordAssignmentRepository(
     const record = await store.get('recordAssignments');
     if (record === undefined) return [];
     // Version 1 entries have the same shape without identityKey: read as they are.
-    if (record.version !== RECORD_ASSIGNMENTS_VERSION && record.version !== 1) {
-      throw new UnsupportedRecordAssignmentsVersionError(record.version);
+    const version = (record as { version?: unknown } | null)?.version;
+    if (version !== RECORD_ASSIGNMENTS_VERSION && version !== 1) {
+      throw new UnsupportedRecordAssignmentsVersionError(version);
     }
-    return record.assignments;
+    // Every entry is checked; one malformed entry refuses the whole record (fail closed).
+    const { assignments } = record as { assignments: unknown };
+    if (
+      !Array.isArray(assignments) ||
+      assignments.length > MAX_RECORD_ASSIGNMENTS ||
+      !assignments.every(isStoredRecordAssignment)
+    ) {
+      throw new CorruptedRecordAssignmentsError();
+    }
+    return assignments;
   }
 
   function serialized<T>(operation: () => Promise<T>): Promise<T> {

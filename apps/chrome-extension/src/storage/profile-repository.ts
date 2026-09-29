@@ -26,6 +26,16 @@ export class UnsupportedProfileVersionError extends Error {
   }
 }
 
+/** A stored profile of a known version whose content is malformed; refused, never repaired. */
+export class CorruptedProfileError extends Error {
+  constructor() {
+    super('Saved profile is corrupted');
+    this.name = 'CorruptedProfileError';
+  }
+}
+
+const KNOWN_VERSIONS: readonly unknown[] = [1, 2, 3, 4];
+
 export function createProfileRepository(
   store: LocalStore<ExtensionStorageSchema>,
 ): ProfileRepository {
@@ -37,8 +47,13 @@ export function createProfileRepository(
       // save. Data we do not understand is refused, never silently discarded.
       const profile = migrateProfile(stored);
       if (!profile) {
-        const version = typeof stored === 'object' && stored !== null && 'schemaVersion' in stored;
-        throw new UnsupportedProfileVersionError(version ? stored.schemaVersion : undefined);
+        const version =
+          typeof stored === 'object' && stored !== null && 'schemaVersion' in stored
+            ? stored.schemaVersion
+            : undefined;
+        // Data of a known version that cannot be read is corrupted: refused as a whole.
+        if (KNOWN_VERSIONS.includes(version)) throw new CorruptedProfileError();
+        throw new UnsupportedProfileVersionError(version);
       }
       return profile;
     },

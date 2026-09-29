@@ -115,8 +115,8 @@ export function createServiceWorkerMessageHandler({
   fillInTab,
   scanTab,
 }: ServiceWorkerMessageHandlerOptions) {
-  // Content scripts share a process with the web page. They may only ask for the profile
-  // status; everything else about the profile or saved mappings is extension-only.
+  // Extension pages have this extension's own origin; a content script's sender URL is the
+  // web page's. The origin ends with "/", so no other origin can match it as a prefix.
   const isExtensionPage = (sender: Sender) => sender.url?.startsWith(extensionOrigin) === true;
 
   /**
@@ -148,7 +148,10 @@ export function createServiceWorkerMessageHandler({
     if (!parsed.ok) return parsed;
     const message = parsed.data;
 
-    if (message.type !== MessageType.GetProfileStatus && !isExtensionPage(sender)) {
+    // Phase 17: every service worker message requires an extension page. Content scripts
+    // share a process with the web page and are never privileged callers: they get nothing
+    // from the service worker, not even the profile status.
+    if (!isExtensionPage(sender)) {
       return MESSAGE_TYPES_FOR_WORKER.has(message.type)
         ? fail('forbidden')
         : fail('unknown-message');
@@ -506,12 +509,33 @@ async function fillApproved(
     instructions.forEach((instruction, i) => {
       const pageResult = pageResults?.[i];
       results[instructionSlots[i] ?? i] =
-        pageResult?.fieldId === instruction.fieldId
-          ? pageResult
+        pageResult?.fieldId === instruction.fieldId && isPlausibleResult(pageResult)
+          ? { fieldId: pageResult.fieldId, status: pageResult.status, message: pageResult.message }
           : pageDidNotRespond(instruction.fieldId);
     });
   }
   return results;
+}
+
+const FILL_STATUSES: ReadonlySet<string> = new Set([
+  'filled',
+  'skipped',
+  'failed',
+  'not-found',
+  'unsupported',
+]);
+
+/**
+ * A result from the page's process is shown to the user only if it is a known status with a
+ * short message (the engines' messages are one or two sentences); anything else is treated
+ * as no answer, so a compromised content script cannot put arbitrary text in the popup.
+ */
+function isPlausibleResult(result: FillResult): boolean {
+  return (
+    FILL_STATUSES.has(result.status) &&
+    typeof result.message === 'string' &&
+    result.message.length <= 300
+  );
 }
 
 const pageDidNotRespond = (fieldId: string): FillResult => ({

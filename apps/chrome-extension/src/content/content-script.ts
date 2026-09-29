@@ -4,13 +4,13 @@
  * in the manifest.
  *
  * It keeps no state between messages and never observes DOM changes. It never receives
- * the profile: only the profile status, scan requests (from the popup, and from the service
- * worker right before filling), and, when the user clicks Fill, the approved field/value
- * pairs. It changes the page only by filling those fields, and never submits.
+ * the profile and never asks the service worker for anything: it only answers scan requests
+ * (from the popup, and from the service worker right before filling) and, when the user
+ * clicks Fill, fills the approved field/value pairs. It changes the page only by filling
+ * those fields, and never submits.
  */
 import { logFailure } from '../log-failure';
 import { fail, MessageType, ok, parseMessage, type PageScan } from '../messaging/protocol';
-import { sendToServiceWorker } from '../messaging/send';
 import { resolvePageAdapter } from './adapters';
 
 type Listener = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
@@ -24,7 +24,7 @@ const pageContext = () => ({ url: window.location.href, root: document });
 const resolveAdapter = (context: ReturnType<typeof pageContext>) =>
   resolvePageAdapter(context).adapter;
 
-async function scanPage(): Promise<PageScan> {
+function scanPage(): PageScan {
   const context = pageContext();
   const adapter = resolveAdapter(context);
   let fields: PageScan['fields'] = [];
@@ -37,17 +37,20 @@ async function scanPage(): Promise<PageScan> {
     logFailure(`${adapter.id} scan`, error);
     unsupported = true;
   }
-  const status = await sendToServiceWorker(MessageType.GetProfileStatus);
   return {
     title: document.title,
     platform: adapter.id,
     fields,
     ...(unsupported ? { unsupported: true } : {}),
-    profileStatus: status.ok ? status.data : null,
   };
 }
 
-const listener: Listener = (rawMessage: unknown, _sender, sendResponse) => {
+const listener: Listener = (rawMessage: unknown, sender, sendResponse) => {
+  // Only this extension (popup, service worker) talks to the content script.
+  if (sender.id !== chrome.runtime.id) {
+    sendResponse(fail('forbidden'));
+    return false;
+  }
   const parsed = parseMessage(rawMessage);
   if (!parsed.ok) {
     sendResponse(parsed);
@@ -59,14 +62,13 @@ const listener: Listener = (rawMessage: unknown, _sender, sendResponse) => {
       sendResponse(ok({ ready: true }));
       return false;
     case MessageType.ScanPage:
-      scanPage().then(
-        (scan) => sendResponse(ok(scan)),
-        (error: unknown) => {
-          logFailure('page scan', error);
-          sendResponse(fail('internal-error'));
-        },
-      );
-      return true; // Async response.
+      try {
+        sendResponse(ok(scanPage()));
+      } catch (error) {
+        logFailure('page scan', error);
+        sendResponse(fail('internal-error'));
+      }
+      return false;
     case MessageType.FillFields:
       resolveAdapter(pageContext())
         .fillFields(pageContext(), message.payload.instructions)

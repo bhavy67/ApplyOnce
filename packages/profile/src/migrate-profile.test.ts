@@ -243,7 +243,7 @@ describe('migrateProfile: version 2 → 3', () => {
     expect(stored).toEqual(phase9Profile);
   });
 
-  it('keeps a version 3 profile with records as is (adding ids), ignoring malformed entries', () => {
+  it('keeps a version 3 profile with records as is (adding ids); refuses malformed entries (Phase 17)', () => {
     const current = {
       ...createEmptyProfile(),
       schemaVersion: 3,
@@ -254,9 +254,9 @@ describe('migrateProfile: version 2 → 3', () => {
     const migrated = migrateProfile(clone(current));
     expectIds(migrated);
     expect(stripIds(migrated)).toEqual({ ...current, schemaVersion: 4 });
+    // Phase 17: corrupted data is refused as a whole, never partly loaded or repaired.
     expect(
-      stripIds(migrateProfile({ ...clone(current), certifications: ['x', null, { name: 'D' }] }))
-        ?.certifications,
-    ).toEqual([{ name: 'D' }]);
+      migrateProfile({ ...clone(current), certifications: ['x', null, { name: 'D' }] }),
+    ).toBeUndefined();
   });
 });

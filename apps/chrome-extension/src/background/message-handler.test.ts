@@ -131,7 +131,7 @@ describe('GetProfile', () => {
 describe('GetProfileStatus', () => {
   it('reports that a profile exists without returning any values', async () => {
     const { handle } = await setup(sampleProfile);
-    const response = await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE);
+    const response = await handle({ type: MessageType.GetProfileStatus }, EXTENSION_PAGE);
 
     expect(response).toEqual({ ok: true, data: { hasData: true, valueCount: 5 } });
     for (const value of SENSITIVE_VALUES) expect(JSON.stringify(response)).not.toContain(value);
@@ -139,9 +139,17 @@ describe('GetProfileStatus', () => {
 
   it('reports an empty profile when nothing is saved', async () => {
     const { handle } = await setup();
-    expect(await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE)).toEqual({
+    expect(await handle({ type: MessageType.GetProfileStatus }, EXTENSION_PAGE)).toEqual({
       ok: true,
       data: { hasData: false, valueCount: 0 },
+    });
+  });
+
+  it('Phase 17: is refused to content scripts (web page senders), like every other message', async () => {
+    const { handle } = await setup(sampleProfile);
+    expect(await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE)).toEqual({
+      ok: false,
+      error: 'forbidden',
     });
   });
 });
@@ -196,7 +204,7 @@ describe('failures and side effects', () => {
       scanTab: () => Promise.resolve([]),
     });
 
-    expect(await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE)).toEqual({
+    expect(await handle({ type: MessageType.GetProfileStatus }, EXTENSION_PAGE)).toEqual({
       ok: false,
       error: 'profile-unavailable',
     });
@@ -340,7 +348,6 @@ describe('FillPage', () => {
         { field: FIELDS.postal, profileField: 'postal_code' }, // no value saved
         { field: FIELDS.notes, profileField: 'address' }, // mapper found no match
         { field: FIELDS.firstName, profileField: 'last_name' }, // not what the mapper matched
-        { field: FIELDS.email, profileField: 'favourite_colour' }, // not a profile field
         { field: FIELDS.relocate, profileField: 'email' }, // checkbox cannot hold an email
         { field: FIELDS.phone, profileField: 'phone' }, // review-level match: allowed when approved
       ]),
@@ -351,15 +358,26 @@ describe('FillPage', () => {
       expect.objectContaining({ fieldId: 'id:zip', status: 'skipped' }),
       expect.objectContaining({ fieldId: 'name:notes', status: 'failed' }),
       expect.objectContaining({ fieldId: 'id:first', status: 'failed' }),
-      expect.objectContaining({
-        fieldId: 'id:email',
-        status: 'failed',
-        message: 'This field can no longer be filled from your profile. Analyze the page again.',
-      }),
       expect.objectContaining({ fieldId: 'name:relocate', status: 'unsupported' }),
       expect.objectContaining({ fieldId: 'name:phone', status: 'filled' }),
     ]);
     expect(calls.flatMap((c) => c.instructions.map((i) => i.fieldId))).toEqual(['name:phone']);
+  });
+
+  it('Phase 17: an approval naming a non-canonical profile target is refused as malformed', async () => {
+    const { calls, fillInTab } = recordingFillInTab();
+    const { handle } = await setup(sampleProfile, fillInTab);
+    for (const profileField of [
+      'favourite_colour',
+      '__proto__',
+      'identity.firstName',
+      'constructor',
+    ]) {
+      expect(
+        await handle(fillPage([{ field: FIELDS.email, profileField }]), EXTENSION_PAGE),
+      ).toEqual({ ok: false, error: 'malformed-message' });
+    }
+    expect(calls).toEqual([]);
   });
 
   it('does not contact the page when nothing is fillable', async () => {
@@ -545,18 +563,23 @@ describe('Teach Once: SaveMapping, ListMappings, DeleteMapping, ClearMappings', 
   });
 
   it.each([
-    ['favourite_colour', preferred],
-    ['location.city', preferred],
-    ['email', field('name:r', 'radio', { name: 'r', label: 'Contact me?' })],
-    ['city', field('index:3', 'text', {})],
-  ])('rejects invalid target %j and stores nothing', async (profileField, target) => {
-    const { handle, store } = await setup(sampleProfile);
-    expect(await handle(save(target, profileField), EXTENSION_PAGE)).toEqual({
-      ok: false,
-      error: 'invalid-mapping',
-    });
-    expect(await store.get('savedMappings')).toBeUndefined();
-  });
+    // Phase 17: a non-canonical target is refused at the message boundary.
+    ['favourite_colour', preferred, 'malformed-message'],
+    ['location.city', preferred, 'malformed-message'],
+    // Canonical targets that do not fit the field are refused by the service worker.
+    ['email', field('name:r', 'radio', { name: 'r', label: 'Contact me?' }), 'invalid-mapping'],
+    ['city', field('index:3', 'text', {}), 'invalid-mapping'],
+  ] as const)(
+    'rejects invalid target %j and stores nothing',
+    async (profileField, target, error) => {
+      const { handle, store } = await setup(sampleProfile);
+      expect(await handle(save(target, profileField), EXTENSION_PAGE)).toEqual({
+        ok: false,
+        error,
+      });
+      expect(await store.get('savedMappings')).toBeUndefined();
+    },
+  );
 
   it('stores no profile values in the saved mapping', async () => {
     const { handle, store } = await setup(sampleProfile);
@@ -870,9 +893,10 @@ describe('Phase 10: repeatable records through the service worker', () => {
     'refuses to save the invalid target %j',
     async (target) => {
       const { handle } = await setup(recordsProfile);
+      // Phase 17: a non-canonical target is refused at the message boundary.
       expect(await teach(handle, previousUniversity, target)).toEqual({
         ok: false,
-        error: 'invalid-mapping',
+        error: 'malformed-message',
       });
     },
   );
@@ -919,7 +943,11 @@ describe('Phase 10: repeatable records through the service worker', () => {
 
   it('never sends record values to web pages', async () => {
     const { handle } = await setup(recordsProfile);
-    const status = await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE);
+    expect(await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE)).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    const status = await handle({ type: MessageType.GetProfileStatus }, EXTENSION_PAGE);
     expect(status).toMatchObject({ ok: true, data: { hasData: true } });
     expect(Object.keys((status as { data: object }).data).sort()).toEqual([
       'hasData',
@@ -2068,7 +2096,7 @@ describe('Phase 16: stale approvals are refused before anything reaches the page
 });
 
 describe('Phase 16: privacy boundary for content scripts', () => {
-  it('a content script (web page sender) may only ask for the profile status', async () => {
+  it('a content script (web page sender) is refused every message (Phase 17: even the status)', async () => {
     const { handle } = await setup(sampleProfile);
     const probe = field('id:x', 'text', { label: 'X' });
     const page = 'https://jobs.example.com/apply';
@@ -2081,7 +2109,15 @@ describe('Phase 16: privacy boundary for content scripts', () => {
       { type: MessageType.DeleteMapping, payload: { key: 'v1|text|q=x|c=|i=' } },
       { type: MessageType.ClearMappings },
       { type: MessageType.GetRuntimeInfo },
-      { type: MessageType.SaveAssignment, payload: { page, field: probe, target: 'city' } },
+      { type: MessageType.GetProfileStatus },
+      {
+        type: MessageType.SaveAssignment,
+        payload: {
+          page,
+          field: probe,
+          target: 'education@aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.degree',
+        },
+      },
       { type: MessageType.DeleteAssignment, payload: { page, field: probe } },
       { type: MessageType.GetRecordChoices },
       { type: MessageType.ListAssignments },
@@ -2094,20 +2130,16 @@ describe('Phase 16: privacy boundary for content scripts', () => {
     // Every service-worker message type is covered here.
     const covered = new Set(messages.map((m) => m.type));
     const workerTypes = Object.values(MessageType).filter(
-      (t) =>
-        ![
-          MessageType.Ping,
-          MessageType.ScanPage,
-          MessageType.FillFields,
-          MessageType.GetProfileStatus,
-        ].includes(t as never),
+      (t) => ![MessageType.Ping, MessageType.ScanPage, MessageType.FillFields].includes(t as never),
     );
     expect(workerTypes.every((t) => covered.has(t as never))).toBe(true);
     for (const message of messages) {
       const response = await handle(message, WEB_PAGE);
       expect(response, message.type).toEqual({ ok: false, error: 'forbidden' });
     }
-    const status = await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE);
-    expect(JSON.stringify(status)).not.toMatch(/Jane|Doe|jane\.doe|Springfield/);
+    expect(await handle({ type: MessageType.GetProfileStatus }, WEB_PAGE)).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
   });
 });

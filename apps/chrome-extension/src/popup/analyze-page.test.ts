@@ -117,7 +117,13 @@ describe('analyzeActiveTab', () => {
       );
     });
     const runtimeSendMessage = vi.fn<(message: unknown) => Promise<unknown>>((message) =>
-      Promise.resolve(isRuntimeInfo(message) ? SAME_BUILD : workerResponse),
+      Promise.resolve(
+        isRuntimeInfo(message)
+          ? SAME_BUILD
+          : (message as { type: string }).type === MessageType.GetProfileStatus
+            ? ok({ hasData: true, valueCount: 3 })
+            : workerResponse,
+      ),
     );
     vi.stubGlobal('chrome', {
       tabs: { query: vi.fn(() => Promise.resolve(tab.id === undefined ? [] : [tab])), sendMessage },
@@ -139,11 +145,13 @@ describe('analyzeActiveTab', () => {
       tabId: 7,
       page: 'https://jobs.example.com/apply',
       site: 'jobs.example.com',
-      scan,
+      scan: { ...scan, profileStatus: { hasData: true, valueCount: 3 } },
       mappings,
     });
     expect(runtimeSendMessage.mock.calls.map(([message]) => message)).toEqual([
       { type: MessageType.GetRuntimeInfo },
+      // Phase 17: the popup asks for the profile status (content scripts are refused).
+      { type: MessageType.GetProfileStatus },
       // Phase 13: the page (origin + path) scopes record assignments.
       {
         type: MessageType.MapFields,

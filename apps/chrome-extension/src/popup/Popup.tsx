@@ -223,7 +223,7 @@ function AnalysisReview({ analysis }: { analysis: Analysis }) {
       )}
 
       {platform && <p className="note">{PLATFORM_NOTES[scan.platform]}</p>}
-      <p className="profile-status">{describeProfile(scan.profileStatus)}</p>
+      <p className="profile-status">{describeProfile(scan.profileStatus ?? null)}</p>
 
       <button
         type="button"

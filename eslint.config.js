@@ -28,4 +28,10 @@ export default tseslint.config(
     files: ['*.{js,ts}', '**/vite*.config.ts'],
     languageOptions: { globals: globals.node },
   },
+  {
+    // Repository scripts (e.g. the security check) run in Node and report to the console.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+    rules: { 'no-console': 'off' },
+  },
 );

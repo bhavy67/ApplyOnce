@@ -9,7 +9,7 @@ filling. It never submits a form for you. The full product specification is in
 
 ## Status
 
-**Phase 16 — Cross-ATS hardening + adapter reliability: complete.**
+**Phase 17 — Security, privacy, permissions & threat audit: complete.**
 
 - Phase 1: you can create, edit, validate, save, and clear a personal profile, stored
   locally in the browser.
@@ -57,6 +57,11 @@ filling. It never submits a form for you. The full product specification is in
   "cannot read this page" result instead of a silent fallback, a fresh check of every
   approval against the page and the profile right before filling, and a guard that stops any
   submission or navigation while filling. See [Platforms and adapters](#platforms-and-adapters).
+- Phase 17: a security and privacy audit with fixes: content scripts get nothing from the
+  service worker, strict message and storage validation (corrupted data is refused, never
+  repaired), option-spoofing protection, a per-field re-check right before filling, an
+  explicit strict CSP, and a build check for permissions, remote code, and test data. See
+  [Privacy model](#privacy-model) and [`docs/security.md`](./docs/security.md).
 
 Nothing is ever submitted.
 
@@ -116,7 +121,8 @@ pnpm install
 | `pnpm lint`      | ESLint across the repository                                       |
 | `pnpm format`    | Formats all files with Prettier (`pnpm format:check` to verify)    |
 | `pnpm typecheck` | Strict type check of every workspace package                       |
-| `pnpm check`     | typecheck + lint + format check + test + build                     |
+| `pnpm security`  | Security check of the build: permissions, CSP, shipped files       |
+| `pnpm check`     | typecheck + lint + format check + test + build + security          |
 
 Browser suites (real Chrome, fake data, local fixtures) are in `e2e/`; see
 [`e2e/README.md`](./e2e/README.md).
@@ -1004,30 +1010,66 @@ The extension uses two Vite configs: `vite.config.ts` builds the popup, the prof
 the service worker (ES modules), and `vite.content.config.ts` builds the content script as a
 single classic script, because MV3 content scripts cannot be ES modules.
 
+## Privacy model
+
+The full threat model (assets, trust boundaries, attacks, mitigations, residual risks) is in
+[`docs/security.md`](./docs/security.md). In short:
+
+- **Local-first.** Your profile, taught mappings, and record assignments are stored only in
+  the extension's own IndexedDB on your device. There is no backend, no account, no sync, no
+  analytics, no telemetry, and no network request of any kind: the built extension contains
+  no code that could make one (checked by `pnpm security`).
+- **What stays inside the extension.** The profile, all records and their ids, saved
+  mappings, assignments, and field fingerprints. Only the extension's own pages (popup,
+  profile page) can ask the service worker for any of it. The content script, which runs in
+  the web page's process, is refused every service worker message.
+- **What crosses to the web page, and when.** Nothing at Analyze (the page is only read).
+  When you click Fill: for each field you approved, that one profile value, plus the field
+  metadata needed to find it again (name, id, question, type, record position, repeat
+  count). Values are looked up at that moment and re-checked against the page first.
+- **What the page can inherently observe.** Once a value is in a form control, the page's
+  own scripts can read it and see the input and change events, exactly as if you had typed
+  it. ApplyOnce does not claim otherwise. It guarantees only that nothing else crosses: no
+  unrelated values, no records or ids, no mappings or assignments, nothing written to
+  attributes, globals, storage, or the URL.
+- **No automatic submission.** ApplyOnce never clicks Submit, Apply, Next, Continue, Save,
+  Finish, or Back, never sends Enter, and stops any form submission a page attempts while it
+  fills. It cannot stop page code that submits or navigates by itself (for example
+  `form.submit()` in a change handler); see docs/security.md.
+- **URLs.** Record assignments remember the page as origin + path only (never credentials,
+  query strings, fragments, or tokens); taught mappings remember only the hostname.
+- **Logs.** Failures are logged as an operation name and an error type only, never messages,
+  values, URLs, or page content.
+
 ## Privacy and security conventions
 
 - Everything stays local. No backend, analytics, telemetry, or external requests.
-- Never log profile values. ESLint rejects `console.log`/`console.info`/`console.debug`;
-  `console.warn`/`console.error` are allowed for failures and must not include profile data.
+- Never log profile values. ESLint rejects `console.log`/`console.info`/`console.debug`, and a
+  test allows production logging only through `logFailure` (operation + sanitized error type).
 - Minimal permissions: `activeTab` + `scripting`, with injection only after an explicit
-  click. No host permissions.
+  click. No host permissions, no declared content scripts, no web-accessible resources, no
+  `externally_connectable`. The extension-page CSP is explicit
+  (`script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`).
+  `pnpm security` (run by `pnpm check`) fails if permissions, CSP, or shipped files change
+  unexpectedly, or if the build contains remote code, network calls, source maps, or test
+  data.
 - The profile stays inside the extension. The service worker is the only context that reads
-  it for others. The full profile (`GetProfile`) is returned only to extension pages;
-  content scripts, which share a process with the web page, get a profile status and, after
-  you click Fill, only the approved field/value pairs. The popup never receives profile
-  values (only whether a value exists). Mapping and fill requests are refused from content
-  scripts. Nothing else is written into the page's DOM, globals, storage, or URL.
+  it for others, and it answers extension pages only. The popup never receives profile
+  values (only whether a value exists).
+- Every message payload is validated structurally (only known keys, bounded sizes, canonical
+  profile targets, strict record ids, page keys = origin + path). Stored profile, mappings,
+  and assignments are validated on every read; corrupted data is refused as a whole, never
+  repaired, and never overwritten by the next save.
 - The content script receives only scan requests and the approved field/value pairs with
-  the field metadata needed to find each field again (name, id, question, type, record
-  position, repeat count). Never the profile, records, record ids, assignments, saved
-  mappings, field fingerprints, or schema. This holds for every adapter and platform hook.
-- Logging goes through one function (`logFailure`) that records the operation and the
-  error type only; a test checks that no other production code logs.
+  the metadata needed to find each field again. Never the profile, records, record ids,
+  assignments, saved mappings, field fingerprints, or schema. This holds for every adapter and
+  platform hook. Its answers are validated like any other untrusted input.
 - The scanner collects field metadata only, never page values.
 - Saved mappings contain only the mapping key parts (field type and normalized question,
   context, or name), the profile field key, the hostname where it was taught, and
-  timestamps. Never form values, profile values, passwords, or page content. Only extension
-  pages can list, save, or delete them; content scripts are refused.
+  timestamps. Never form values, profile values, passwords, or page content.
+- Page text (labels, options) and profile values are always rendered as text; the extension
+  never renders raw HTML.
 - No secrets or API keys in the repository. `.env*` files are git-ignored.
 
 ## Intentionally not implemented yet

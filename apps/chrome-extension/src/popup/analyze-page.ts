@@ -99,8 +99,11 @@ export async function analyzeActiveTab(): Promise<AnalysisResult> {
   if (!response.ok)
     return failure(response.error === 'no-receiver' ? 'no-response' : 'scan-failed');
   if (!isPageScan(response.data)) return failure('scan-failed');
-  const scan = response.data;
-  if (scan.unsupported) return failure('unreadable-page');
+  if (response.data.unsupported) return failure('unreadable-page');
+
+  // The popup (an extension page) asks for the profile status; the content script cannot.
+  const status = await sendToServiceWorker(MessageType.GetProfileStatus);
+  const scan: PageScan = { ...response.data, profileStatus: status.ok ? status.data : null };
 
   const page = pageKeyOf(tab.url);
   const mapped = await sendToServiceWorker(MessageType.MapFields, {

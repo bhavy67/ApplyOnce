@@ -8,6 +8,7 @@ import {
   type Profile,
   type WorkMode,
 } from './profile';
+import { isRecordId } from '@applyonce/core';
 import { isBlankRecord } from './profile-values';
 import { withRecordIds } from './record-ids';
 
@@ -31,10 +32,88 @@ type UnknownRecord = Record<string, unknown>;
  */
 export function migrateProfile(stored: unknown): Profile | undefined {
   if (!isRecord(stored)) return undefined;
+  if (findProfileCorruption(stored) !== undefined) return undefined;
   if (stored.schemaVersion === PROFILE_SCHEMA_VERSION) return withDefaults(stored);
   if (stored.schemaVersion === 3) return withDefaults(stored);
   if (stored.schemaVersion === 2) return withDefaults(migrateV2ToV3(stored));
   if (stored.schemaVersion === 1) return withDefaults(migrateV2ToV3(migrateV1ToV2(stored)));
+  return undefined;
+}
+
+/** Longest stored text value accepted (far above any real answer). */
+export const MAX_PROFILE_TEXT_LENGTH = 100_000;
+
+const SCALAR_SECTIONS = [
+  'identity',
+  'contact',
+  'location',
+  'experience',
+  'links',
+  'preferences',
+  'authorization',
+] as const;
+const RECORD_COLLECTIONS = ['education', 'workExperience', 'certifications'] as const;
+
+/**
+ * Why a stored profile is corrupted, or undefined when its shape is sound. Checked before
+ * any migration, so corrupted data is refused as a whole (never partly loaded, "repaired",
+ * or overwritten by the next save):
+ *
+ * - a known section that is not an object of plain values (text, finite numbers, yes/no);
+ * - a record list that is not a list of such objects (a version 1 or 2 `education` object
+ *   and `experience.workHistory` are the only older shapes accepted);
+ * - text longer than MAX_PROFILE_TEXT_LENGTH;
+ * - since version 4: a record id that is present but malformed, or used twice in a list.
+ *
+ * Keys such as "__proto__" or "constructor" inside a section are plain data here: values
+ * are only ever read through canonical paths and own properties (see profile-values.ts).
+ */
+export function findProfileCorruption(stored: UnknownRecord): string | undefined {
+  const version = stored.schemaVersion;
+  const isPlainValue = (value: unknown) =>
+    value === undefined ||
+    (typeof value === 'string' && value.length <= MAX_PROFILE_TEXT_LENGTH) ||
+    (typeof value === 'number' && Number.isFinite(value)) ||
+    typeof value === 'boolean';
+  const isPlainRecord = (
+    value: unknown,
+    allow: (key: string, v: unknown) => boolean = () => false,
+  ) =>
+    isRecord(value) && Object.entries(value).every(([key, v]) => isPlainValue(v) || allow(key, v));
+
+  for (const section of SCALAR_SECTIONS) {
+    const value = stored[section];
+    if (value === undefined) continue;
+    // Versions 1–2 kept work history (a list) and lists of preferences inside sections.
+    const olderLists = (key: string, v: unknown) =>
+      typeof version === 'number' &&
+      version <= 2 &&
+      Array.isArray(v) &&
+      ((section === 'experience' && key === 'workHistory') ||
+        (section === 'preferences' && (key === 'workModes' || key === 'employmentTypes')));
+    if (!isPlainRecord(value, olderLists)) return `section ${section}`;
+  }
+  for (const collection of RECORD_COLLECTIONS) {
+    const value = stored[collection];
+    if (value === undefined) continue;
+    const olderShape = typeof version === 'number' && version <= 2 && collection === 'education';
+    if (
+      olderShape &&
+      (isPlainRecord(value) || (Array.isArray(value) && value.every((r) => isPlainRecord(r))))
+    )
+      continue;
+    if (!Array.isArray(value) || !value.every((record) => isPlainRecord(record))) {
+      return `records ${collection}`;
+    }
+    if (version === PROFILE_SCHEMA_VERSION) {
+      const ids = value
+        .map((record) => (record as UnknownRecord).id)
+        .filter((id) => id !== undefined);
+      if (ids.some((id) => !isRecordId(id)) || new Set(ids).size !== ids.length) {
+        return `record ids ${collection}`;
+      }
+    }
+  }
   return undefined;
 }
 

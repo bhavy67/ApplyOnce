@@ -11,7 +11,6 @@ export {
   getProfileValue,
   isBlankRecord,
   moveRecord,
-  readProfilePath,
   readStoredValue,
   recordChoices,
   recordCount,

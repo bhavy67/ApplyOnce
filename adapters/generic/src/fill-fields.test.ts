@@ -286,9 +286,16 @@ describe('option matching helpers', () => {
   it('reports ambiguity instead of guessing', async () => {
     const duplicate = [...options, { value: 'y2', label: 'yes' }];
     expect(findMatchingOption(duplicate, describeOption, 'Yes')).toBe('ambiguous');
-    // A stricter stage with a single match wins before labels are compared.
+    // Phase 17: a value match on one option and a label match on another conflict (the
+    // page shows "Yes" on a different option than the one whose value is "yes"): ambiguous.
     const byValue = [...options, { value: 'yes', label: 'Yes please' }];
-    expect(findMatchingOption(byValue, describeOption, 'Yes')).toBe(byValue[2]);
+    expect(findMatchingOption(byValue, describeOption, 'Yes')).toBe('ambiguous');
+    // Without a conflicting option, the stricter value match still wins.
+    const alone = [
+      { value: 'yes', label: 'Yes please' },
+      { value: 'n', label: 'No' },
+    ];
+    expect(findMatchingOption(alone, describeOption, 'Yes')).toBe(alone[0]);
   });
 
   it.each([

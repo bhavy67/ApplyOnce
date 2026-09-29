@@ -110,7 +110,7 @@ apps/chrome-extension/src/profile-page   React UI; talks only to ProfileReposito
  │  scan, fill           │ ◄── ScanPage, ───┐              │ FillPage
  │                       │     FillFields   │              │
  └──────────┬────────────┘  (approved pairs) │             │ (fields + approvals,
-            │ GetProfileStatus               │             │  never values)
+            │ (asks the worker nothing)      │             │  never values)
             ▼                                │             ▼
  ┌─────────────────────────────────────────────────────────────┐
  │ service worker (message-handler.ts)                         │
@@ -137,11 +137,14 @@ apps/chrome-extension/src/profile-page   React UI; talks only to ProfileReposito
   result, never an exception. `src/messaging/send.ts` wraps `chrome.runtime.sendMessage`
   and `chrome.tabs.sendMessage`, turning "no receiver" and malformed responses into error
   results.
-- **Profile exposure.** `GetProfile`, `MapFields`, `FillPage`, and the saved-mapping
-  messages are accepted only when the sender's URL is an extension page. Content scripts share a renderer process with the
-  web page, so they get `GetProfileStatus` (`{ hasData, valueCount }`) and, on Fill, a
-  `FillFields` message with only the approved field/value pairs. `MapFields` returns
-  `hasValue` flags, not values, so the popup never holds profile values either.
+- **Profile exposure.** Every service worker message is accepted only when the sender's URL
+  is this extension's origin (Phase 17: including `GetProfileStatus`, which the popup now
+  asks for and attaches to the scan). Content scripts share a renderer process with the web
+  page, so they get nothing from the worker: they only receive `ScanPage` and, on Fill, a
+  `FillFields` message with only the approved field/value pairs, and they accept messages
+  only from this extension (`sender.id`). `MapFields` returns `hasValue` flags, not values,
+  so the popup never holds profile values either. Fill results coming back from the page
+  must have a known status and a short message (`isPlausibleResult`), or they are replaced.
 - **Fill checks.** For each approval the service worker re-runs the mapper (with the
   current saved mappings and assignments) on the field and requires the same profile field
   with status _mapped_, _review_, _taught_, or _assigned_, checks the field type can hold
@@ -160,7 +163,20 @@ apps/chrome-extension/src/profile-page   React UI; talks only to ProfileReposito
   `extension-updated` failure ("Reload the extension"); no receiver yields
   `worker-unavailable`. Nothing is scanned or injected in either case.
 - **Payload validation.** Every payload is structurally validated in `parseMessage`
-  (`messaging/validate.ts`); malformed payloads are rejected.
+  (`messaging/validate.ts`); malformed payloads are rejected. Since Phase 17: a message is
+  `{ type }` or `{ type, payload }` only; payloads and nested objects (fields, signals,
+  options, records, identities, approvals, handles, instructions) may hold only their own
+  keys (`hasOnlyKeys`); text is bounded (`MAX_TEXT_LENGTH`, `MAX_VALUE_LENGTH`); profile
+  targets must be canonical (`isProfileTargetText`), assignment targets record-id targets;
+  fill values are text, finite numbers, or booleans.
+- **Stored data validation (Phase 17).** `migrateProfile` refuses a profile of a known
+  version whose shape is corrupted (`findProfileCorruption`: non-object sections, non-plain
+  values, huge text, malformed or duplicate record ids since version 4); the repository then
+  throws `CorruptedProfileError`, reported as `profile-unavailable`, and the profile page
+  shows no editor, so nothing overwrites it. Saved mappings and assignments are validated
+  entry by entry on every read (`isStoredSavedMapping`, `isStoredRecordAssignment`); any bad
+  entry refuses the whole record (`Corrupted…Error`): mapping continues without them, writes
+  are refused, clearing still works.
 - **Injection.** Only on user action, only into the active tab's top frame, only for
   http/https/file URLs. The popup pings first and injects `content.js` only when nothing
   answers. The script replaces its own listener if injected again, so there is never more
@@ -407,6 +423,17 @@ adapters: resolution, metadata (`isFormField`), identity, every control type, ex
 values, failure isolation, stale mutations, dynamic questions, and no submission; plus
 conflict, look-alike host, and DOM-safety cases for the resolver. `log-failure.test.ts`
 checks that no production code logs except through `logFailure`.
+
+**Security hardening (Phase 17).** See `docs/security.md` for the threat model. Code
+changes: content scripts refused every worker message; strict payload and stored-data
+validation (above); `findMatchingOption` treats a winner that another stage contradicts
+(value on one option, visible text on another) as ambiguous; "Save" (and "Save and exit",
+"Save draft", "Submit and continue") added to the navigation actions; `fillFields` re-scans
+right before each field and requires the control to still be connected (a field whose generated id changed in a framework re-render is found again only through its unique identity, `locate`); `logFailure` logs a
+sanitized error name only; the explicit extension-page CSP; Vite's module-preload polyfill
+disabled (no `fetch` in the bundle); `readProfilePath` no longer exported. Checks:
+`scripts/security-check.mjs` (`pnpm security`), `*/src/security.test.ts` in core, profile,
+generic, and the extension, `popup/xss.test.ts`, and `e2e/suites/e2e-phase17.mjs`.
 
 ## Mapping pipeline
 

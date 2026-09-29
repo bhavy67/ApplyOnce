@@ -1,5 +1,6 @@
 import {
   isFieldType,
+  isProfileTarget,
   MAX_PROFILE_RECORDS,
   PROFILE_RECORD_COLLECTIONS,
   type FillInstruction,
@@ -13,6 +14,46 @@ import {
 
 /** Upper bound on fields per message, far above any real form. */
 export const MAX_FIELDS_PER_MESSAGE = 2000;
+
+/** Upper bound on any page-derived text (labels, names, ids…), far above real forms. */
+export const MAX_TEXT_LENGTH = 10_000;
+
+/** Upper bound on one value sent for filling (a long free-text answer fits easily). */
+export const MAX_VALUE_LENGTH = 100_000;
+
+/** Upper bound on a profile target such as "education@<id>.fieldOfStudy". */
+const MAX_TARGET_LENGTH = 200;
+
+/** Only these keys may be present (unknown properties are rejected, never ignored). */
+export function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+export const isBoundedText = (value: unknown, max = MAX_TEXT_LENGTH): value is string =>
+  typeof value === 'string' && value.length <= max;
+
+/** A canonical profile target (scalar key, record position, or record id), never a path. */
+export function isProfileTargetText(value: unknown): value is string {
+  return isBoundedText(value, MAX_TARGET_LENGTH) && isProfileTarget(value);
+}
+
+const FORM_FIELD_KEYS = [
+  'id',
+  'type',
+  'htmlType',
+  'required',
+  'visible',
+  'disabled',
+  'readOnly',
+  'groupSize',
+  'custom',
+  'repeatedCount',
+  'record',
+  'identity',
+  'signals',
+  'form',
+  'options',
+];
 
 const CUSTOM_PATTERNS = ['input-combobox', 'combobox', 'listbox-button', 'search-input'];
 
@@ -30,7 +71,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-const isOptionalString = (value: unknown) => value === undefined || typeof value === 'string';
+const isOptionalString = (value: unknown) => value === undefined || isBoundedText(value);
 
 export function isBoundedArray(value: unknown): value is unknown[] {
   return Array.isArray(value) && value.length <= MAX_FIELDS_PER_MESSAGE;
@@ -41,10 +82,11 @@ export function isFormField(value: unknown): value is FormField {
   const { id, type, htmlType, required, visible, disabled, readOnly, groupSize } = value;
   const { signals, form, options, custom, repeatedCount, record, identity } = value;
   return (
-    typeof id === 'string' &&
+    hasOnlyKeys(value, FORM_FIELD_KEYS) &&
+    isBoundedText(id, 2000) &&
     typeof type === 'string' &&
     isFieldType(type) &&
-    typeof htmlType === 'string' &&
+    isBoundedText(htmlType, 100) &&
     typeof required === 'boolean' &&
     typeof visible === 'boolean' &&
     typeof disabled === 'boolean' &&
@@ -56,17 +98,25 @@ export function isFormField(value: unknown): value is FormField {
     (identity === undefined || isFieldIdentity(identity)) &&
     (custom === undefined ||
       (isRecord(custom) &&
+        hasOnlyKeys(custom, ['pattern', 'supported']) &&
         typeof custom.pattern === 'string' &&
         CUSTOM_PATTERNS.includes(custom.pattern) &&
         typeof custom.supported === 'boolean')) &&
     isRecord(signals) &&
+    hasOnlyKeys(signals, SIGNAL_KEYS) &&
     SIGNAL_KEYS.every((key) => isOptionalString(signals[key])) &&
     (form === undefined ||
-      (isRecord(form) && ['id', 'name', 'action'].every((key) => isOptionalString(form[key])))) &&
+      (isRecord(form) &&
+        hasOnlyKeys(form, ['id', 'name', 'action']) &&
+        ['id', 'name', 'action'].every((key) => isOptionalString(form[key])))) &&
     (options === undefined ||
       (isBoundedArray(options) &&
         options.every(
-          (o) => isRecord(o) && typeof o.value === 'string' && typeof o.label === 'string',
+          (o) =>
+            isRecord(o) &&
+            hasOnlyKeys(o, ['value', 'label']) &&
+            isBoundedText(o.value) &&
+            isBoundedText(o.label),
         )))
   );
 }
@@ -75,16 +125,19 @@ export function isFillInstruction(value: unknown): value is FillInstruction {
   if (!isRecord(value) || !isRecord(value.expected)) return false;
   const { fieldId, value: fillValue, expected } = value;
   return (
-    typeof fieldId === 'string' &&
-    ['string', 'number', 'boolean'].includes(typeof fillValue) &&
+    hasOnlyKeys(value, ['fieldId', 'value', 'expected']) &&
+    // Fingerprints never go to the page (the service worker checks them): no `identity`.
+    hasOnlyKeys(expected, ['type', 'name', 'htmlId', 'label', 'record', 'repeatedCount']) &&
+    isBoundedText(fieldId, 2000) &&
+    (isBoundedText(fillValue, MAX_VALUE_LENGTH) ||
+      (typeof fillValue === 'number' && Number.isFinite(fillValue)) ||
+      typeof fillValue === 'boolean') &&
     typeof expected.type === 'string' &&
     isFieldType(expected.type) &&
     ['name', 'htmlId', 'label'].every((key) => isOptionalString(expected[key])) &&
     (expected.record === undefined || isFieldRecord(expected.record)) &&
     (expected.repeatedCount === undefined ||
-      (Number.isInteger(expected.repeatedCount) && (expected.repeatedCount as number) > 1)) &&
-    // Fingerprints never go to the page (the service worker checks them).
-    !('identity' in expected)
+      (Number.isInteger(expected.repeatedCount) && (expected.repeatedCount as number) > 1))
   );
 }
 
@@ -92,6 +145,7 @@ export function isFillInstruction(value: unknown): value is FillInstruction {
 function isFieldIdentity(value: unknown): boolean {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, ['key', 'unique']) &&
     typeof value.key === 'string' &&
     /^fp-[0-9a-f]{16}$/.test(value.key) &&
     typeof value.unique === 'boolean'
@@ -102,6 +156,7 @@ function isFieldIdentity(value: unknown): boolean {
 function isFieldRecord(value: unknown): boolean {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, ['collection', 'index']) &&
     typeof value.collection === 'string' &&
     (PROFILE_RECORD_COLLECTIONS as readonly string[]).includes(value.collection) &&
     Number.isInteger(value.index) &&
@@ -110,7 +165,11 @@ function isFieldRecord(value: unknown): boolean {
   );
 }
 
-/** The page a record assignment belongs to: origin + path, without query or fragment. */
+/**
+ * The page a record assignment belongs to: origin + path, never credentials, query, or
+ * fragment ("https://user:pw@example.com/p?token=x#y" → "https://example.com/p"). Only
+ * http(s) pages have one.
+ */
 export function pageKeyOf(url: string | undefined): string | undefined {
   try {
     const parsed = new URL(url ?? '');

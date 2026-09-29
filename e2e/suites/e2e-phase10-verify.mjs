@@ -484,7 +484,8 @@ try {
   check('Privacy: the popup gets record counts, not record contents', popupMessages === JSON.stringify({ ok: true, data: { mappings: [], records: { education: 4, workExperience: 4, certifications: 3 } } }), popupMessages);
   const status = await tab.evaluate(`chrome.runtime.sendMessage({ type: 'applyonce/get-profile-status' }).then((r) => JSON.stringify(r))`, world.id);
   const profileFromPage = await tab.evaluate(`chrome.runtime.sendMessage({ type: 'applyonce/get-profile' }).then((r) => JSON.stringify(r))`, world.id);
-  check('Privacy: the content script gets a status only, and is refused the profile', /^\{"ok":true,"data":\{"hasData":true,"valueCount":\d+\}\}$/.test(status) && profileFromPage === JSON.stringify({ ok: false, error: 'forbidden' }), `${status} ${profileFromPage}`);
+  // Since Phase 17 the content script is refused every service worker message, even the status.
+  check('Privacy: the content script is refused the status and the profile', status === JSON.stringify({ ok: false, error: 'forbidden' }) && profileFromPage === JSON.stringify({ ok: false, error: 'forbidden' }), `${status} ${profileFromPage}`);
   await popup.close();
 
   // =================== 6. Position-based mapping ===================
